@@ -41,7 +41,7 @@ def createScene(rootNode):
                        coneFactor=ContactParams.coneFactor, angleCone=0.1)
 
     rootNode.addObject('FreeMotionAnimationLoop')
-    generic = rootNode.addObject('ProjectedGaussSeidelConstraintSolver', tolerance="1e-20",
+    generic = rootNode.addObject('BlockGaussSeidelConstraintSolver', tolerance="1e-20",
                                  maxIterations="500", computeConstraintForces=1, printLog="0")
 
     gravity = [0, 0, 0]
@@ -73,7 +73,7 @@ def createScene(rootNode):
     gelNode = cubeNode.getChild('gelNode')
     # FEM constraint points
     constraintPointNode = addConstraintPoint(
-        gelNode, slidingPoint.getLinkPath())
+        gelNode, slidingPoint.slidingPointMO.getLinkPath()[1:])
 
     # @info : This is the constraint point that will be used to compute the distance between the needle and the volume
     conttactL = rootNode.addObject('ContactListener', name="contactListener",
