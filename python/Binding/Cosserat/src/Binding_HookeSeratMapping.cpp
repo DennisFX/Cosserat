@@ -52,7 +52,7 @@ void moduleAddHookeSeratMapping(py::module &m) {
 
     // Explicit instantiation for Vec3Types
     using Strain2FramesCosseratMapping = Strain2FramesCosseratMapping<Vec3Types, Rigid3Types, Rigid3Types>;
-    py::class_<Strain2FramesCosseratMapping, CosseratGeometryMapping<Vec3Types, Rigid3Types, Rigid3Types>, py_shared_ptr<Strain2FramesCosseratMapping>> c3(m, "HookeSeratDiscretMapping3");
+    py::class_<Strain2FramesCosseratMapping, py_shared_ptr<Strain2FramesCosseratMapping>> c3(m, "HookeSeratDiscretMapping3");
 
     PythonFactory::registerType<Strain2FramesCosseratMapping>(
         [](sofa::core::objectmodel::Base *object) {
