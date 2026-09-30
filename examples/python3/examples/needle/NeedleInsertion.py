@@ -4,14 +4,13 @@
 Based on the work done with SofaPython. See POEMapping.py
 """
 
-import Sofa
-
 from cosserat.needle.needleController import Animation
 from cosserat.needle.params import NeedleParameters, GeometryParams, PhysicsParams, FemParams, ContactParams
 from cosserat.usefulFunctions import pluginList
 from cosserat.createFemRegularGrid import createFemCubeWithParams
 from cosserat.cosseratObject import Cosserat
 from useful.utils import addConstraintPoint
+from rosLink import RosLink
 import sys
 
 # params = NeedleParameters()
@@ -22,27 +21,6 @@ nbFrames = GeometryParams.nbFrames
 needleGeometryConfig = {'init_pos': [0., 0., 0.], 'tot_length': GeometryParams.totalLength,
                         'nbSectionS': GeometryParams.nbSections, 'nbFramesF': nbFrames,
                         'buildCollisionModel': 1, 'beamMass': PhysicsParams.mass}
-
-import socket
-
-class RosListener(Sofa.Core.Controller):
-    def __init__(self, *args, **kwargs):
-        Sofa.Core.Controller.__init__(self, *args, **kwargs)
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind(('127.0.0.1', 9871))
-        self.sock.setblocking(False)
-
-    def onAnimateBeginEvent(self, event):
-        while True:
-            try:
-                data, _ = self.sock.recvfrom(4096)
-            except BlockingIOError:
-                break
-            print("[ROS]", data.decode(), flush=True)
-            #TODO: hardcode wrench and send to gazebo
-            self.sock.sendto(b"bye", ('127.0.0.1', 9872))
-            print("[SOFA]: bye")
-
 
 def createScene(rootNode):
 
@@ -116,7 +94,7 @@ def createScene(rootNode):
 
     # ---------------------------------------------------
     # @info: Start controller node
-    rootNode.addObject(RosListener(name="rosListener"))
+    rootNode.addObject(RosLink(name="rosLink"))  # Ctrl+W / Ctrl+R, see rosLink.py
 
     rootNode.addObject(Animation(needle, conttactL, generic,
                        constraintPointNode, rootNode, constraintPoinMo))
