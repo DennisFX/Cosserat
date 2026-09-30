@@ -82,6 +82,7 @@ def createScene(rootNode):
     needle = Cosserat(parent=solverNode, cosseratGeometry=needleGeometryConfig, radius=GeometryParams.radius,
         name="needle", youngModulus=PhysicsParams.youngModulus, poissonRatio=PhysicsParams.poissonRatio,
         rayleighStiffness=PhysicsParams.rayleighStiffness)
+    needle.cosseratCoordinateNode.addObject('FixedProjectiveConstraint', fixAll=True) # TODO comment out if we do not want a rigid needle
     needleCollisionModel = needle.addPointCollisionModel("needleCollision")
 
     # These state is mapped on the needle and used to compute the distance between the needle and the
