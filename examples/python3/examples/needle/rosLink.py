@@ -92,7 +92,7 @@ class RosLink(Sofa.Core.Controller):
                             kwargs.get('sendPort', SOFA_TO_ROS_PORT))
 
         # W-key test wrench: SI units, Gazebo world frame, applied by ApplyLinkWrench
-        self.testForce = kwargs.get('testForce', [200.0, 0.0, 0.0])
+        self.testForce = kwargs.get('testForce', [20, 0.0, 0.0])
         self.testTorque = kwargs.get('testTorque', [0.0, 0.0, 0.0])
         self.logPeriod = kwargs.get('logPeriod', 1.0)  # s between joint-error prints, 0 = silent
 

@@ -11,6 +11,7 @@ from cosserat.createFemRegularGrid import createFemCubeWithParams
 from cosserat.cosseratObject import Cosserat
 from useful.utils import addConstraintPoint
 from rosLink import RosLink
+from wrenchMonitor import WrenchMonitor
 import sys
 
 # params = NeedleParameters()
@@ -61,6 +62,12 @@ def createScene(rootNode):
         name="needle", youngModulus=PhysicsParams.youngModulus, poissonRatio=PhysicsParams.poissonRatio,
         rayleighStiffness=PhysicsParams.rayleighStiffness)
     needle.cosseratCoordinateNode.addObject('FixedProjectiveConstraint', fixAll=True) # TODO comment out if we do not want a rigid needle
+
+    # Wrench monitor sanity check: 1 N sideways at the tip, 15 cm from the base. Once settled,
+    # expect base F ~ (0, -100, 0) and T ~ (0, 0, -1500) in scene units. Uncomment to run it.
+    # tip = len(needle.cosseratFrame.FramesMO.position.value) - 1
+    # needle.cosseratFrame.addObject('ConstantForceField', indices=[tip], forces=[[0, 100, 0, 0, 0, 0]])
+
     needleCollisionModel = needle.addPointCollisionModel("needleCollision")
 
     # These state is mapped on the needle and used to compute the distance between the needle and the
@@ -104,3 +111,13 @@ def createScene(rootNode):
         'CosseratNeedleSlidingConstraint', name="computeDistanceComponent")
     distanceStatsNode.addObject('DifferenceMultiMapping', name="pointsMulti", input1=inputVolumeMo, lastPointIsFixed=0,
                                 input2=inputNeedleMo, output=outputDistanceMo, direction="@../../FramesMO.position")
+
+    # Must stay last: it looks up computeDistanceComponent by name, created just above
+    wrenchMonitor = rootNode.addObject(WrenchMonitor(
+        name="wrenchMonitor", rootNode=rootNode, needle=needle, solver=generic,
+        slidingConstraint=distanceStatsNode.computeDistanceComponent,
+        distanceMO=constraintPoinMo,
+        youngModulus=PhysicsParams.youngModulus,
+        poissonRatio=PhysicsParams.poissonRatio,
+        radius=GeometryParams.radius,
+        printEvery=20))
