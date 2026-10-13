@@ -120,4 +120,5 @@ def createScene(rootNode):
         youngModulus=PhysicsParams.youngModulus,
         poissonRatio=PhysicsParams.poissonRatio,
         radius=GeometryParams.radius,
+        rayleighStiffness=PhysicsParams.rayleighStiffness,  # same value as the EulerImplicitSolver
         printEvery=20))

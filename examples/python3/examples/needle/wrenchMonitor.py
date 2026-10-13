@@ -13,7 +13,13 @@ createScene(), after the CosseratNeedleSlidingConstraint is created:
         youngModulus=PhysicsParams.youngModulus,
         poissonRatio=PhysicsParams.poissonRatio,
         radius=GeometryParams.radius,
+        rayleighStiffness=PhysicsParams.rayleighStiffness,
         printEvery=20))
+
+rayleighStiffness must match the EulerImplicitSolver the needle runs under.
+Rayleigh damping turns the stiff base spring into a large damper, so the
+spring alone reports huge forces whenever the base moves; the monitor
+subtracts that damping term.
 
 Results are refreshed after every time step and exposed as attributes:
     baseForce, baseTorque  wrench the needle holder applies ON the needle,
@@ -77,6 +83,7 @@ class WrenchMonitor(Sofa.Core.Controller):
         spring = needle.rigidBaseNode.spring
         self.kLin = float(np.atleast_1d(spring.stiffness.value)[0])
         self.kAng = float(np.atleast_1d(spring.angularStiffness.value)[0])
+        self.rayleighStiffness = float(kwargs["rayleighStiffness"])
 
         # 2. Section stiffness, same formulas as BeamHookeLawForceField (circular section).
         #    If you built the needle with inertialParams, pass sectionStiffness=[GJ, EI, EI].
@@ -102,18 +109,24 @@ class WrenchMonitor(Sofa.Core.Controller):
         self.step += 1
         if self.printEvery and self.step % self.printEvery == 0:
             np.set_printoptions(precision=4, suppress=True)
-            # print(f"[t={self.rootNode.time.value:.3f}] base F={self.baseForce} "
-            #       f"T={self.baseTorque} | max |M| section={np.abs(self.sectionMoments).max(initial=0):.4g} "
-            #       f"| tissue pts={len(self.lateralForces)}")
+            print(f"[t={self.rootNode.time.value:.3f}] base F={self.baseForce} "
+                  f"T={self.baseTorque} | max |M| section={np.abs(self.sectionMoments).max(initial=0):.4g} "
+                  f"| tissue pts={len(self.lateralForces)}")
 
     def computeBaseWrench(self):
-        """Spring reaction at the base = total wrench transmitted by the needle to its holder."""
+        """Wrench the holder applies on the needle: spring reaction minus Rayleigh damping.
+
+        Rayleigh stiffness damping adds -beta * k * v on the base, so the holder's net
+        effect is k * (gap - beta * v). What's left is -(tissue wrench) + needle inertia.
+        """
         x = np.asarray(self.baseMO.position.value[0], dtype=float)
         x0 = np.asarray(self.baseMO.rest_position.value[0], dtype=float)
-        force = self.kLin * (x0[:3] - x[:3])
+        v = np.asarray(self.baseMO.velocity.value[0], dtype=float)  # [v, omega], world frame
+        beta = self.rayleighStiffness
+        force = self.kLin * ((x0[:3] - x[:3]) - beta * v[:3])
         # Same convention as RestShapeSpringsForceField<Rigid3>: dq = q_rest * q^-1
         dq = quatMultiply(x0[3:], quatInverse(x[3:]))
-        torque = self.kAng * quatToRotvec(dq)
+        torque = self.kAng * (quatToRotvec(dq) - beta * v[3:])
         return force, torque
 
     def computeSectionMoments(self):
