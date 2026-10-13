@@ -1,6 +1,6 @@
 # Cosserat: needle insertion on SOFA v26.06 (`needle-v26.06`)
 
-This branch pins a known-working setup of the Cosserat plugin's **needle insertion example** on **SOFA v26.06.00**, plus a small UDP bridge for communicating with ROS.
+This branch pins a known-working setup of the Cosserat plugin's **needle insertion example** on **SOFA v26.06.00**, plus a UDP link to ROS 2 and a monitor for the wrench at the needle base.
 
 For the plugin's own documentation, see the original README on the [`master`](https://github.com/DennisFX/Cosserat/tree/master) branch, which mirrors upstream [SofaDefrost/Cosserat](https://github.com/SofaDefrost/Cosserat).
 
@@ -13,7 +13,7 @@ This branch is based on upstream `main` at commit `ece9067` (2026-09-05) and is 
 | Component | Version |
 |---|---|
 | SOFA | tag `v26.06.00` (commit `7c18e95`, 2026-07-13) |
-| Cosserat | this branch (upstream `main` @ `ece9067` + 3 commits) |
+| Cosserat | this branch (upstream `main` @ `ece9067` + the changes below) |
 | Environment | pixi, `supported-plugins` environment (conda-forge Python 3.12) |
 | Host | Ubuntu with ROS 2 Jazzy |
 
@@ -23,7 +23,7 @@ This branch is based on upstream `main` at commit `ece9067` (2026-09-05) and is 
 
 ## What this branch changes
 
-Three commits on top of upstream `ece9067`:
+On top of upstream `ece9067`:
 
 1. **Bindings fix.** `python/Binding/Cosserat/src/Binding_HookeSeratMapping.cpp` declared a pybind11 base class (`CosseratGeometryMapping`) that is never registered, so importing the bindings failed with `ImportError: generic_type: type "HookeSeratDiscretMapping3" referenced unknown base type`. The base class is dropped from the declaration.
 2. **Legacy needle example workarounds.**
@@ -31,7 +31,9 @@ Three commits on top of upstream `ece9067`:
    - `utils.py` copied from `python/cosserat/` to `examples/python3/useful/` and `examples/python3/cosserat/`, where the example still imports it from.
    - `NeedleInsertion.py`: `ProjectedGaussSeidelConstraintSolver` → `BlockGaussSeidelConstraintSolver` (renamed in SOFA v26.06).
    - `NeedleInsertion.py`: `beamPath` is passed as the sliding point's mechanical object path without the leading `@`, as `PointsManager` expects.
-3. **RosListener.** A controller in `NeedleInsertion.py` that exchanges UDP messages with an external ROS process (see [ROS bridge](#ros-bridge)).
+3. **ROS link.** `rosLink.py`, next to the scene, exchanges JSON messages over UDP with the ROS 2 bridge node: joint errors in, wrenches out (see [ROS link](#ros-link)).
+4. **Wrench monitor.** `wrenchMonitor.py`, next to the scene, computes the wrench at the needle base every step (see [Wrench monitor](#wrench-monitor)).
+5. **Rigid needle.** `NeedleInsertion.py` freezes the Cosserat strains with a `FixedProjectiveConstraint`, so the needle moves as one rigid body driven by its base. The scene declares the `Sofa.Component.Constraint.Projective` plugin that provides it. Remove the constraint line to get the flexible needle back.
 
 The upstream example's keyboard handling is unchanged.
 
@@ -170,16 +172,18 @@ At startup, confirm this line appears:
 [SofaPython3] Added '/home/<user>/dev/Cosserat/examples/python3/' to sys.path
 ```
 
-### Aliases
+### Shortcuts
 
 Add these to `~/.bashrc`:
 
 ```bash
-alias runsofa='pixi run --manifest-path ~/sofa -e supported-plugins ~/sofa/.pixi/envs/supported-plugins/sofa-build/bin/runSofa -l SofaPython3'
+runsofa() {
+  (cd ~/sofa && pixi run -e supported-plugins .pixi/envs/supported-plugins/sofa-build/bin/runSofa -l SofaPython3 "$@")
+}
 alias runsofa_needle='runsofa ~/dev/Cosserat/examples/python3/examples/needle/NeedleInsertion.py'
 ```
 
-`runsofa <scene.py>` runs any scene from any folder, and `runsofa_needle` opens the needle scene.
+`runsofa <scene.py>` runs any scene, and `runsofa_needle` opens the needle scene. `runsofa` is a function rather than an alias because pixi has to run from `~/sofa`. The parentheses keep your terminal where it was, but they also mean scene paths must be absolute (`~/...` is fine).
 
 ### After editing code
 
@@ -196,25 +200,71 @@ Defined in `examples/python3/cosserat/needle/needleController.py` (`onKeypressed
 | ↑ / ↓ | Move the needle base along Y |
 | `I` / `K` | Move the needle base along Z |
 | `M` / `D` | Add / remove a constraint point |
+| Ctrl + `W` | Send the test wrench to the Gazebo needle (`rosLink.py`) |
+| Ctrl + `R` | Release it |
 
-If keys don't seem to reach the scene, make sure the 3D view has focus and try holding Ctrl with the key.
+If keys don't seem to reach the scene, make sure the 3D view has focus and try holding Ctrl with the key. `W` and `R` always need Ctrl.
 
 ---
 
-## ROS bridge
+## Wrench monitor
 
-`RosListener` (in `NeedleInsertion.py`) binds UDP `127.0.0.1:9871`. On every simulation step, it reads any pending datagrams, prints them as `[ROS] <message>`, and replies `bye` to `127.0.0.1:9872`.
+`WrenchMonitor` (in `wrenchMonitor.py`) runs after every step. Every 20 steps it prints a line like this:
 
-- Messages are only processed while the simulation is animating.
-- Only one SOFA instance can run the scene at a time, since the port can only be bound once.
-
-To test it without ROS, start the scene and press Animate, then from another terminal:
-
-```bash
-python3 -c "import socket; socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(b'hello', ('127.0.0.1', 9871))"
+```
+[t=54.600] base F=[ 0.     20.3838  9.8345] T=[  0.     -70.5368 162.8324] | max |M| section=0 | tissue pts=6
 ```
 
-SOFA should print `[ROS] hello` followed by `[SOFA]: bye`.
+| Field | Meaning |
+|---|---|
+| `base F`, `base T` | Wrench the needle holder applies **on** the needle, at the needle base, in the SOFA scene frame. Negate it to get what the tissue does to the needle. |
+| `max \|M\| section` | Largest internal bending/twisting moment. Always 0 while the needle is rigid. |
+| `tissue pts` | Number of sliding-constraint points inside the gel. |
+
+The scene is in cm, kg and s, so 100 force units are 1 N and 10⁴ torque units are 1 N·m.
+
+How the base wrench is computed: the needle base is held by a stiff spring (`RestShapeSpringsForceField`), and the monitor takes that spring's reaction **minus** the Rayleigh damping the solver adds to it. Without the damping correction, every keypress shows up as a spike of millions of units. For this to work, `rayleighStiffness` passed to the monitor must equal the solver's (the scene passes `PhysicsParams.rayleighStiffness` to both).
+
+The values are also available to other controllers as `wrenchMonitor.baseForce`, `.baseTorque`, `.sectionMoments` and `.lateralForces`. The monitor only needs numpy; SOFA's pixi environment has no scipy.
+
+Things to know when reading the numbers:
+
+- **Short blips on each keypress** are the needle's inertia while the base catches up with the new rest position. They scale with `PhysicsParams.mass` (0.3 kg by default).
+- **No axial force once inside the gel.** The sliding constraint ignores the needle axis, so the model has no friction along the shaft; the only axial resistance is at puncture.
+- **To check the monitor**, uncomment the two `ConstantForceField` lines in `NeedleInsertion.py`. They apply 1 N sideways at the tip, 15 cm from the base. Once settled, the monitor should read F ≈ (0, −100, 0) and T ≈ (0, 0, −1500).
+
+---
+
+## ROS link
+
+`RosLink` (in `rosLink.py`) connects the scene to the [`ros2sofa_bridge`](https://github.com/DennisFX/ros2SOFA_medical) node over UDP on localhost. The scene never imports `rclpy`: SOFA's pixi environment and the system ROS install load conflicting libraries, and the two crash when loaded into one process.
+
+| Port | Direction |
+|---|---|
+| `9871` | ROS → SOFA (SOFA listens) |
+| `9872` | SOFA → ROS (the bridge listens) |
+
+Each datagram is one JSON object with a `type` field. All values are SI.
+
+| `type` | Direction | Fields | Effect |
+|---|---|---|---|
+| `joint_error` | in | `names`, `positions`, `stamp` | UR5 joint tracking errors; printed once per second as `[rosLink] joint error (rad): ...` |
+| `wrench` | out | `force`, `torque` | Wrench applied to the Gazebo needle, in Gazebo's world frame |
+| `clear` | out | none | Stops pushing on the Gazebo needle |
+
+Ctrl+W sends a fixed test wrench (`testForce` in `rosLink.py`) and Ctrl+R sends `clear`. The ROS side sets the Gazebo wrench rather than adding to it, so pressing W again doesn't increase the force.
+
+- Incoming messages are read at the start of each step, so nothing is received while the scene is paused. Key presses are sent immediately, paused or not.
+- Only one SOFA instance can run the scene at a time, since port 9871 can only be bound once. Reloading the scene in the same runSofa is fine.
+- New message types, keys and outgoing messages can be added from the scene without editing `rosLink.py`, through `rosLink.subscribe(...)`, `rosLink.bindKey(...)` and `rosLink.send(...)`. See the docstring at the top of the file.
+
+To test it without ROS, start the scene and press Animate. Send it a joint error from another terminal:
+
+```bash
+python3 -c "import json, socket; socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(json.dumps({'type': 'joint_error', 'names': ['j1'], 'positions': [0.001]}).encode(), ('127.0.0.1', 9871))"
+```
+
+SOFA should print `[rosLink] joint error (rad): j1=+1.00e-03`. To see what SOFA sends, stop the ROS bridge if it's running (it holds port 9872), run `nc -ul 127.0.0.1 9872`, and press Ctrl+W in SOFA.
 
 ---
 
@@ -229,4 +279,6 @@ SOFA should print `[ROS] hello` followed by `[SOFA]: bye`.
 | `Class already registered in the ObjectFactory: InterventionalRadiologyController<...>` | Duplicate registration between BeamAdapter and BeamAdapter.CUDA. |
 | `Skipped running the post-link scripts` (pixi) | pixi skips package install scripts by default; the one listed belongs to librsvg and doesn't affect SOFA. |
 | `Cannot set window position/size from settings` | First run with an empty `~/.config/SOFA`; disappears afterwards. |
+| `[MechanicalObject(MousePosition)] Invalid vOp operation` | Clicking in the 3D view (mouse picking); doesn't affect the simulation. |
+| `[SceneCheckMultithreading] ... parallel implementation is available` | A suggestion, not an error. |
 | Deprecation warnings during compilation | SOFA API deprecations; they don't affect the build. |
