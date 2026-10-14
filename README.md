@@ -1,6 +1,6 @@
 # Cosserat: needle insertion on SOFA v26.06 (`needle-v26.06`)
 
-This branch pins a known-working setup of the Cosserat plugin's **needle insertion example** on **SOFA v26.06.00**, plus a UDP link to ROS 2 and a monitor for the wrench at the needle base.
+This branch pins a known-working setup of the Cosserat plugin's **needle insertion example** on **SOFA v26.06.00**. It adds a UDP link to ROS 2, a monitor for the wrench at the needle base, and a coupling that lets a UR5 simulated in Gazebo drive the needle while the needle's wrench acts back on the arm.
 
 For the plugin's own documentation, see the original README on the [`master`](https://github.com/DennisFX/Cosserat/tree/master) branch, which mirrors upstream [SofaDefrost/Cosserat](https://github.com/SofaDefrost/Cosserat).
 
@@ -34,6 +34,7 @@ On top of upstream `ece9067`:
 3. **ROS link.** `rosLink.py`, next to the scene, exchanges JSON messages over UDP with the ROS 2 bridge node: joint errors in, wrenches out (see [ROS link](#ros-link)).
 4. **Wrench monitor.** `wrenchMonitor.py`, next to the scene, computes the wrench at the needle base every step (see [Wrench monitor](#wrench-monitor)).
 5. **Rigid needle.** `NeedleInsertion.py` freezes the Cosserat strains with a `FixedProjectiveConstraint`, so the needle moves as one rigid body driven by its base. The scene declares the `Sofa.Component.Constraint.Projective` plugin that provides it. Remove the constraint line to get the flexible needle back.
+6. **Gazebo coupling.** `gazeboCoupling.py`, next to the scene, makes the needle base follow the Gazebo needle and sends the base wrench back to it (see [Following the Gazebo needle](#following-the-gazebo-needle)).
 
 The upstream example's keyboard handling is unchanged.
 
@@ -200,6 +201,7 @@ Defined in `examples/python3/cosserat/needle/needleController.py` (`onKeypressed
 | ↑ / ↓ | Move the needle base along Y |
 | `I` / `K` | Move the needle base along Z |
 | `M` / `D` | Add / remove a constraint point |
+| Ctrl + `G` | Start / stop following the Gazebo needle (`gazeboCoupling.py`) |
 | Ctrl + `W` | Send the test wrench to the Gazebo needle (`rosLink.py`) |
 | Ctrl + `R` | Release it |
 
@@ -249,7 +251,8 @@ Each datagram is one JSON object with a `type` field. All values are SI.
 | `type` | Direction | Fields | Effect |
 |---|---|---|---|
 | `joint_error` | in | `names`, `positions`, `stamp` | UR5 joint tracking errors; printed once per second as `[rosLink] joint error (rad): ...` |
-| `wrench` | out | `force`, `torque` | Wrench applied to the Gazebo needle, in Gazebo's world frame |
+| `base_pose` | in | `p` (m), `q` (x, y, z, w), `stamp` | Where the Gazebo needle base is, in the `sofa_scene` frame; used by the coupling |
+| `wrench` | out | `force`, `torque`, optional `frame` | Wrench applied to the Gazebo needle. Without `frame` it is in Gazebo's world frame; the coupling sends it in `sofa_scene` and the bridge rotates it. |
 | `clear` | out | none | Stops pushing on the Gazebo needle |
 
 Ctrl+W sends a fixed test wrench (`testForce` in `rosLink.py`) and Ctrl+R sends `clear`. The ROS side sets the Gazebo wrench rather than adding to it, so pressing W again doesn't increase the force.
@@ -265,6 +268,37 @@ python3 -c "import json, socket; socket.socket(socket.AF_INET, socket.SOCK_DGRAM
 ```
 
 SOFA should print `[rosLink] joint error (rad): j1=+1.00e-03`. To see what SOFA sends, stop the ROS bridge if it's running (it holds port 9872), run `nc -ul 127.0.0.1 9872`, and press Ctrl+W in SOFA.
+
+---
+
+## Following the Gazebo needle
+
+`GazeboCoupling` (in `gazeboCoupling.py`) couples this scene to the UR5 in Gazebo. The ROS side, including where the scene sits in the robot's world and the insertion workflow, is described in the ros2SOFA_medical README, under [Insert the needle into the SOFA gel](https://github.com/DennisFX/ros2SOFA_medical#insert-the-needle-into-the-sofa-gel).
+
+The scene's origin corresponds to the Gazebo needle base at a fixed **pre-insertion pose**, so at that pose both needles coincide. Press **Ctrl+G** with the arm there:
+
+- **Engaging is refused** if the Gazebo needle is more than 1 cm or about 6° from the SOFA needle, with a message giving the offset. Otherwise the arm's travel to the pre-insertion pose would drag the needle through the gel.
+- **While following**, the needle base rest pose moves toward the newest `base_pose` every step, by at most 0.5 cm and 0.05 rad per step, so a sudden jump can't hit the stiff base spring all at once. The arrow keys are overridden.
+- **After every step**, the coupling sends the needle base wrench to Gazebo. That is minus the monitor's `baseForce` / `baseTorque` (what the needle does to its holder), converted to N and N·m. It goes out in the `sofa_scene` frame, and the bridge rotates it into the world frame.
+- **Ctrl+G again** stops following, sends a zero wrench, and leaves the needle where it is.
+
+If poses stop arriving while following, the needle holds the last one, and SOFA prints a warning after 1 s.
+
+Options, passed to `GazeboCoupling(...)` in `NeedleInsertion.py`:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `wrenchGain` | `1.0` | Multiplies the wrench sent to Gazebo; raise it to make small tissue forces visible on the arm while checking directions |
+| `sendWrenches` | `True` | `False` follows Gazebo without pushing back |
+| `maxStep`, `maxAngleStep` | `0.5`, `0.05` | Largest rest-pose change per step (scene units, rad) |
+| `engageDistance`, `engageAngle` | `1.0`, `0.1` | How close the needles must be for Ctrl+G to engage (scene units, rad) |
+| `metersPerUnit`, `kgPerUnit` | `0.01`, `1.0` | Scene units; the defaults are cm and kg |
+| `key` | `'G'` | Toggle key, used with Ctrl. Avoid `F`: Ctrl+F makes runSofa fullscreen. |
+
+Things to know:
+
+- **The SOFA needle's mass shows up in Gazebo.** The wrench includes the needle's inertia while the base accelerates, so with `PhysicsParams.mass` at 0.3 kg every change of speed adds a small push on the arm. The Gazebo needle is 5 g, so setting the mass to 0.005 in `cosserat/needle/params.py` matches the two.
+- **Insert along the scene's x axis.** `needleController.py` decides whether the needle moves forward or back by comparing scene x coordinates, so insertions should keep the needle along its starting axis.
 
 ---
 

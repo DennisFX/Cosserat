@@ -12,6 +12,7 @@ from cosserat.cosseratObject import Cosserat
 from useful.utils import addConstraintPoint
 from rosLink import RosLink
 from wrenchMonitor import WrenchMonitor
+from gazeboCoupling import GazeboCoupling
 import sys
 
 # params = NeedleParameters()
@@ -26,6 +27,7 @@ needleGeometryConfig = {'init_pos': [0., 0., 0.], 'tot_length': GeometryParams.t
 def createScene(rootNode):
 
     rootNode.addObject('RequiredPlugin', name='plugins', pluginName=[pluginList])
+    rootNode.addObject('RequiredPlugin', name='Sofa.Component.Constraint.Projective')  # FixedProjectiveConstraint
 
     rootNode.addObject('VisualStyle', displayFlags='showVisualModels showBehaviorModels hideCollisionModels '
                                                    'hideBoundingCollisionModels hideForceFields '
@@ -101,7 +103,7 @@ def createScene(rootNode):
 
     # ---------------------------------------------------
     # @info: Start controller node
-    rootNode.addObject(RosLink(name="rosLink"))  # Ctrl+W / Ctrl+R, see rosLink.py
+    rosLink = rootNode.addObject(RosLink(name="rosLink"))  # Ctrl+W / Ctrl+R, see rosLink.py
 
     rootNode.addObject(Animation(needle, conttactL, generic,
                        constraintPointNode, rootNode, constraintPoinMo))
@@ -122,3 +124,8 @@ def createScene(rootNode):
         radius=GeometryParams.radius,
         rayleighStiffness=PhysicsParams.rayleighStiffness,  # same value as the EulerImplicitSolver
         printEvery=20))
+
+    # Ctrl+G: follow the Gazebo needle and send it the base wrench. After the monitor,
+    # so the wrench it sends is the one computed this step. See gazeboCoupling.py.
+    rootNode.addObject(GazeboCoupling(name="gazeboCoupling", rosLink=rosLink,
+                                      monitor=wrenchMonitor, needle=needle))
