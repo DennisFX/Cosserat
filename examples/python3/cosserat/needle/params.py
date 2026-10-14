@@ -16,7 +16,7 @@ class GeometryParams:
 class PhysicsParams:
     youngModulus: float = 1.20e9
     poissonRatio: float = 0.4
-    mass: float = 0.3
+    mass: float = 0.005  # kg; light so SOFA's needle inertia doesn't add to the wrench Gazebo gets
     rayleighStiffness: float = 0.1
 
 
