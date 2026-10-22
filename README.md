@@ -36,6 +36,7 @@ On top of upstream `ece9067`:
 5. **Rigid needle.** `NeedleInsertion.py` freezes the Cosserat strains with a `FixedProjectiveConstraint`, so the needle moves as one rigid body driven by its base. The scene declares the `Sofa.Component.Constraint.Projective` plugin that provides it. Remove the constraint line to get the flexible needle back. The needle also weighs 5 g (`PhysicsParams.mass`), like the Gazebo needle.
 6. **Gazebo coupling.** `gazeboCoupling.py`, next to the scene, makes the needle base follow the Gazebo needle and sends the base wrench back to it (see [Following the Gazebo needle](#following-the-gazebo-needle)).
 7. **Gel in a container.** `FemParams.box` in `cosserat/needle/params.py` holds the gel's x = 40 face (opposite the entry face) and its four side faces, instead of only the y = −8 face. In the Gazebo world the needle goes in from above, so the gel sits in a box on the ground with its top open. Held at the bottom only, a sideways push on the needle would tilt the whole 24 cm block instead of loading the gel around the needle.
+8. **Gel points follow the needle's own depth.** `cosserat/needle/needleController.py` attaches a gel point at the tip every 1.3 cm on the way in and removes them on the way out. Upstream decided when by measuring from the tip to the deepest gel point, which moves with the gel: when the inserted needle was moved sideways, the gel could shift that point far enough to attach a new one in deformed gel, leaving a permanent sideways force. Now each point's depth (the tip's scene x when it was attached) is remembered and the tip is compared with that, so sideways moves never add or remove points. Straight insertion and retraction behave as before. Each event is printed: `[needle] punctured at x = ...`, `[needle] gel point 2 added at x = ...`, `... removed ...`, `[needle] out of the gel`.
 
 The upstream example's keyboard handling is unchanged.
 
@@ -201,7 +202,7 @@ Defined in `examples/python3/cosserat/needle/needleController.py` (`onKeypressed
 | ← / → | Move the needle base along X |
 | ↑ / ↓ | Move the needle base along Y |
 | `I` / `K` | Move the needle base along Z |
-| `M` / `D` | Add / remove a constraint point |
+| `M` / `D` | Add / remove a constraint point (the controller re-syncs its remembered depths) |
 | Ctrl + `G` | Start / stop following the Gazebo needle (`gazeboCoupling.py`) |
 | Ctrl + `W` | Send the test wrench to the Gazebo needle (`rosLink.py`) |
 | Ctrl + `R` | Release it |
@@ -288,7 +289,7 @@ Options, passed to `GazeboCoupling(...)` in `NeedleInsertion.py`:
 |---|---|---|
 | `wrenchGain` | `1.0` | Multiplies the wrench sent to Gazebo; raise it to make small tissue forces visible on the arm while checking directions |
 | `sendWrenches` | `True` | `False` follows Gazebo without pushing back |
-| `maxForce`, `maxTorque` | `50.0`, `10.0` | Safety cutoff on the wrench sent to Gazebo, after `wrenchGain` (N, N·m). The UR5's wrist gives way somewhere above ~100 N at the needle base. |
+| `maxForce`, `maxTorque` | `50.0`, `10.0` | Safety cutoff on the wrench sent to Gazebo, after `wrenchGain` (N, N·m). The UR5's wrist gives way somewhere above ~100 N at the needle base. `float('inf')` for both turns the cutoff off; a wrench that isn't a number still stops the coupling. |
 | `maxStep`, `maxAngleStep` | `0.5`, `0.05` | Largest rest-pose change per step (scene units, rad) |
 | `engageDistance`, `engageAngle` | `1.0`, `0.1` | How close the needles must be for Ctrl+G to engage (scene units, rad) |
 | `metersPerUnit`, `kgPerUnit` | `0.01`, `1.0` | Scene units; the defaults are cm and kg |
@@ -297,9 +298,9 @@ Options, passed to `GazeboCoupling(...)` in `NeedleInsertion.py`:
 Things to know:
 
 - **The SOFA needle's mass shows up in Gazebo.** The wrench includes the needle's inertia while the base accelerates. At 5 g, the same as the Gazebo needle, that push is small.
-- **Insert along the scene's x axis.** `needleController.py` decides whether the needle moves forward or back by comparing scene x coordinates, so insertions should keep the needle along its starting axis. Sideways moves at full depth are fine.
+- **Insert along the scene's x axis.** `needleController.py` adds and removes gel points as the tip moves along scene x, so insertions should keep the needle along its starting axis. Sideways moves at full depth are fine: they don't change the tip's x, so they never add or remove points.
 - **The scene is placed vertically in the Gazebo world.** The ROS side maps the scene's +x to world −Z, so the needle goes in from above, and the gel sits in a container (see [What this branch changes](#what-this-branch-changes)). runSofa still draws the scene in its own frame, with the needle horizontal.
-- **Keep sideways moves small.** The gel mesh is coarse (cells 4.8 × 3.2 × 2 cm along x, y, z) and nearly incompressible (Poisson ratio 0.48), and the container walls are 5 cm (z) and 8 cm (y) from the needle. Sideways moves of 3 and 5 mm work; 15 mm squashed the gel against the walls until the scene went unstable. A finer mesh around the needle would allow larger moves, at the cost of speed.
+- **Keep sideways moves small.** The gel mesh is coarse (cells 4.8 × 3.2 × 2 cm along x, y, z) and nearly incompressible (Poisson ratio 0.48), and the container walls are 5 cm (z) and 8 cm (y) from the needle. Sideways moves of 3 and 5 mm work: 5 mm gives about 50 N along z and 25 N along y with the rigid needle, roughly 10 and 5 N/mm, and the coarse mesh couples the two (a move along z also pushes along y). 15 mm squashed the gel against the walls until the scene went unstable. A finer mesh around the needle would allow larger moves and reduce the coupling, at the cost of speed; a flexible needle (remove the `FixedProjectiveConstraint` line) would bend and take up much of the motion.
 
 ---
 

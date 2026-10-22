@@ -10,10 +10,6 @@ import numpy as np
 from Sofa import Cosserat
 import Sofa
 from cosserat.needle.params import ConstraintsParams
-from useful.utils import (
-    computePositiveAlongXDistanceBetweenPoints,
-    computeNegativeAlongXDistanceBetweenPoints,
-)
 
 
 class Animation(Sofa.Core.Controller):
@@ -45,7 +41,23 @@ class Animation(Sofa.Core.Controller):
         self.rate = 0.2
         self.angularRate = 0.02
         self.tipForce = [0.0, 0.0, 0]
+        # Scene x of the needle tip when each constraint point was added, deepest last. Points
+        # are added and removed by comparing the tip with these, not with the points
+        # themselves: the points belong to the gel and move when it deforms (e.g. when the
+        # needle is moved sideways), which used to add points in deformed gel mid-sweep.
+        self.pointDepths = []
         return
+
+    def tipX(self):
+        """Scene x of the needle tip: how far it has gone along the insertion axis."""
+        return float(self.needleSlidingState.position.array()[-1][0])
+
+    def leaveGel(self):
+        self.inside = False
+        self.needleCollisionModel.findData("activated").value = True
+        self.generic.computeConstraintForces.value = True
+        self.tipForce = [0.0, 0.0, 0]
+        self.pointDepths = []
 
     def onAnimateEndEvent(self, event):
         if self.contactListener.getContactPoints() and not self.inside:
@@ -69,6 +81,8 @@ class Animation(Sofa.Core.Controller):
                 # @Info 3. Add entryPoint point as the first constraint point in FEM
                 self.pointManager.addNewPointToState()
                 self.inside = True
+                self.pointDepths = [self.tipX()]
+                print(f"[needle] punctured at x = {self.pointDepths[0]:.2f}", flush=True)
 
             elif self.tipForce[0] > self.threshold:
                 pass
@@ -78,44 +92,38 @@ class Animation(Sofa.Core.Controller):
 
         else:
             if self.inside:
-                # @info 1. check if the needle reached the distance to create/remove a constraint point
-                slidingPos = self.needleSlidingState.position.array()
-                constraintPos = self.constraintPts.position.array()
+                # @info 1. check if the tip went far enough along the needle axis to add or
+                # remove a constraint point
+                points = self.constraintPts.position.array()
+                if len(points) != len(self.pointDepths):
+                    # Points added or removed elsewhere (M/D keys here, S/L in PointsManager)
+                    self.pointDepths = [float(p[0]) for p in points]
+                if not self.pointDepths:
+                    self.leaveGel()
+                    return
+                tip, last = self.tipX(), self.pointDepths[-1]
+                step = ConstraintsParams.constraintDistance
 
                 # Add constraint point when going forwards
-                if (
-                    computePositiveAlongXDistanceBetweenPoints(
-                        slidingPos, constraintPos
-                    )
-                    > ConstraintsParams.constraintDistance
-                ):
+                if tip - last > step:
                     self.pointManager.addNewPointToState()
+                    self.pointDepths.append(tip)
+                    print(f"[needle] gel point {len(self.pointDepths)} added at x = {tip:.2f}",
+                          flush=True)
 
-                # Going backwards ...
-                elif (
-                    computeNegativeAlongXDistanceBetweenPoints(
-                        slidingPos, constraintPos
-                    )
-                    > 0
-                ):
-                    # If last constraint, remove the entry point and get out from the gel
-                    if len(constraintPos) == 1:
-                        self.inside = False
-                        self.needleCollisionModel.findData("activated").value = True
-                        self.generic.computeConstraintForces.value = True
-                        self.tipForce = [0.0, 0.0, 0]
+                # Only the entry point left: out of the gel once the tip is back above it
+                elif len(self.pointDepths) == 1:
+                    if tip < points[0][0]:
                         self.pointManager.removeLastPointfromState()
+                        self.leaveGel()
+                        print("[needle] out of the gel", flush=True)
 
-                    # Remove previous constraint point when going backwards
-                    elif (
-                        computeNegativeAlongXDistanceBetweenPoints(
-                            slidingPos, constraintPos
-                        )
-                        > ConstraintsParams.constraintDistance
-                    ):
-                        self.pointManager.removeLastPointfromState()
-                else:
-                    pass
+                # Remove previous constraint point when going backwards
+                elif last - tip > step:
+                    self.pointManager.removeLastPointfromState()
+                    self.pointDepths.pop()
+                    print(f"[needle] gel point {len(self.pointDepths) + 1} removed at x = {tip:.2f}",
+                          flush=True)
 
     def onKeypressedEvent(self, event):
         key = event["key"]
