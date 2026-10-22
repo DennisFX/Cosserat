@@ -103,7 +103,7 @@ class RosLink(Sofa.Core.Controller):
         self._unhandledTypes = set()
         self._lastLog = 0.0
 
-        self.subscribe('joint_error', self._logJointError)
+        # self.subscribe('joint_error', self._logJointError)
         self.bindKey('W', self.applyTestWrench)
         self.bindKey('R', self.clearWrench)
 
@@ -153,7 +153,7 @@ class RosLink(Sofa.Core.Controller):
         if callback is not None:
             callback()
 
-    def _logJointError(self, msg):
+    def _logJointError(self, msg): #TODO update to something meaningful
         now = time.monotonic()
         if not self.logPeriod or now - self._lastLog < self.logPeriod:
             return

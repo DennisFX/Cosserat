@@ -76,7 +76,6 @@ class WrenchMonitor(Sofa.Core.Controller):
         self.sliding = kwargs.get("slidingConstraint")
         self.distanceMO = kwargs.get("distanceMO")
         self.printEvery = kwargs.get("printEvery", 0)
-        self.step = 0
 
         # 1. Base: held by a RestShapeSpringsForceField named 'spring' (Cosserat prefab)
         self.baseMO = needle.rigidBaseNode.RigidBaseMO
@@ -106,12 +105,6 @@ class WrenchMonitor(Sofa.Core.Controller):
         self.sectionMoments = self.computeSectionMoments()
         self.lateralForces = self.computeLateralForces()
 
-        self.step += 1
-        if self.printEvery and self.step % self.printEvery == 0:
-            np.set_printoptions(precision=4, suppress=True)
-            print(f"[t={self.rootNode.time.value:.3f}] base F={self.baseForce} "
-                  f"T={self.baseTorque} | max |M| section={np.abs(self.sectionMoments).max(initial=0):.4g} "
-                  f"| tissue pts={len(self.lateralForces)}")
 
     def computeBaseWrench(self):
         """Wrench the holder applies on the needle: spring reaction minus Rayleigh damping.

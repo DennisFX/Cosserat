@@ -29,8 +29,7 @@ class FemParams:
     minVol: string = "16. -8. -5."
     maxVol: string = "40. 8. 5."
     mesh: string = "6 6 6"
-    box: string = "15 -10 -10 41 -6 10"
-
+    box: string = "39 -10 -10 41 10 10"
 
 @dataclass
 class ContactParams:
