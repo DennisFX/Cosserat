@@ -29,7 +29,9 @@ class FemParams:
     minVol: string = "16. -8. -5."
     maxVol: string = "40. 8. 5."
     mesh: string = "6 6 6"
-    box: string = "39 -10 -10 41 10 10"
+    box: string = ("39 -10 -10 41 10 10  "                         # bottom, x = 40
+                "15 -10 -10 41 -7 10  15 7 -10 41 10 10  "      # sides y = -8, y = 8
+                "15 -10 -10 41 10 -4  15 -10 4 41 10 10")       # sides z = -5, z = 5
 
 @dataclass
 class ContactParams:

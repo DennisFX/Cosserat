@@ -18,6 +18,9 @@ While following:
   - after each step, the base wrench goes to Gazebo: minus the monitor's baseForce and
     baseTorque (what the needle does to its holder), in SI units, times wrenchGain,
     expressed in the sofa_scene frame (the bridge rotates it into the world frame).
+  - if that wrench exceeds maxForce or maxTorque (or is not finite), it is not sent and
+    following stops: the scene has almost certainly gone unstable, and passing the
+    wrench on would throw the arm around, which the needle would then follow.
 Turning it off sends a zero wrench and leaves the needle where it is.
 
 Usage, at the end of createScene(), after the WrenchMonitor:
@@ -65,6 +68,10 @@ class GazeboCoupling(Sofa.Core.Controller):
         self.engageAngle = kwargs.get('engageAngle', 0.1)        # rad
         self.wrenchGain = kwargs.get('wrenchGain', 1.0)          # >1 exaggerates it in Gazebo
         self.sendWrenches = kwargs.get('sendWrenches', True)
+        # Safety cutoff on the wrench sent to Gazebo (after wrenchGain). The UR5's wrist joints
+        # give way somewhere above ~100 N at the needle base.
+        self.maxForce = kwargs.get('maxForce', 50.0)             # N
+        self.maxTorque = kwargs.get('maxTorque', 10.0)           # N.m
         self.frame = kwargs.get('frame', 'sofa_scene')           # TF frame of the SOFA scene
         self.staleAfter = kwargs.get('staleAfter', 1.0)          # s without a pose before warning
 
@@ -146,6 +153,13 @@ class GazeboCoupling(Sofa.Core.Controller):
         gain = self.wrenchGain
         force = -np.asarray(self.monitor.baseForce, dtype=float) * self.forceToSI * gain
         torque = -np.asarray(self.monitor.baseTorque, dtype=float) * self.torqueToSI * gain
+        f, t = np.linalg.norm(force), np.linalg.norm(torque)
+        if not (np.isfinite(f) and np.isfinite(t)) or f > self.maxForce or t > self.maxTorque:
+            print(f'[coupling] base wrench |F| = {f:.3g} N, |T| = {t:.3g} N.m is over the limit '
+                  f'({self.maxForce:g} N, {self.maxTorque:g} N.m), not sending it. The scene has '
+                  f'probably gone unstable: reload it before coupling again.', flush=True)
+            self.stop()
+            return
         self.rosLink.send('wrench', frame=self.frame,
                           force=force.tolist(), torque=torque.tolist())
 
