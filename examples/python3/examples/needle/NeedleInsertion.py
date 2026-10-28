@@ -63,7 +63,7 @@ def createScene(rootNode):
     needle = Cosserat(parent=solverNode, cosseratGeometry=needleGeometryConfig, radius=GeometryParams.radius,
         name="needle", youngModulus=PhysicsParams.youngModulus, poissonRatio=PhysicsParams.poissonRatio,
         rayleighStiffness=PhysicsParams.rayleighStiffness)
-    # needle.cosseratCoordinateNode.addObject('FixedProjectiveConstraint', fixAll=True) # TODO comment out if we do not want a rigid needle
+    needle.cosseratCoordinateNode.addObject('FixedProjectiveConstraint', fixAll=True) # TODO comment out if we do not want a rigid needle
 
     # Wrench monitor sanity check: 1 N sideways at the tip, 15 cm from the base. Once settled,
     # expect base F ~ (0, -100, 0) and T ~ (0, 0, -1500) in scene units. Uncomment to run it.

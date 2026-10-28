@@ -8,10 +8,15 @@ datagram, each with a "type" field. Everything on the wire is SI (m, N, N.m,
 rad): convert scene units on this side before sending.
 
     ROS -> SOFA  (port 9871)
+        {"type": "base_pose", "stamp": 12.3, "p": [x, y, z], "q": [x, y, z, w]}
         {"type": "joint_error", "stamp": 12.3, "names": [...], "positions": [...]}
     SOFA -> ROS  (port 9872)
-        {"type": "wrench", "force": [fx, fy, fz], "torque": [tx, ty, tz]}
+        {"type": "wrench", "force": [fx, fy, fz], "torque": [tx, ty, tz],
+         "frame": "sofa_scene", "stamp": 12.31}    # frame and stamp optional
         {"type": "clear"}
+
+stamp is Gazebo's simulation time in seconds. A wrench's stamp is the Gazebo time it was
+computed for; Gazebo waits for stamped wrenches (lockstep, see gazeboCoupling.py).
 
 Usage, in createScene():
 
@@ -24,8 +29,10 @@ Extending it without touching this file:
     rosLink.subscribe("some_event", callback, everyMessage=True)  # every single one
     rosLink.bindKey("X", callback)                                # runSofa: Ctrl + X
     rosLink.send("some_type", field=value)
+    rosLink.waitForMessages(0.01); rosLink.poll()  # read mid-step, e.g. to wait for ROS
 """
 import json
+import select
 import socket
 import time
 
@@ -57,6 +64,11 @@ class UdpLink:
         fields['type'] = msgType
         self.sock.sendto(json.dumps(fields).encode(), self.peer)
 
+    def waitReadable(self, timeout):
+        """Wait up to timeout [s] for a datagram; return whether one is there."""
+        readable, _, _ = select.select([self.sock], [], [], max(0.0, timeout))
+        return bool(readable)
+
     def receiveAll(self):
         """Drain the socket and return every valid message, oldest first."""
         messages = []
@@ -83,7 +95,8 @@ class RosLink(Sofa.Core.Controller):
         R   clear it
 
     Incoming messages are read at the start of each step, so nothing arrives
-    while the scene is paused. Key presses are sent immediately, paused or not.
+    while the scene is paused (other components can also read them mid-step with
+    poll()). Key presses are sent immediately, paused or not.
     """
 
     def __init__(self, *args, **kwargs):
@@ -119,6 +132,10 @@ class RosLink(Sofa.Core.Controller):
     def send(self, msgType, **fields):
         self.link.send(msgType, **fields)
 
+    def waitForMessages(self, timeout):
+        """Wait up to timeout [s] of wall time for a message; poll() then handles it."""
+        return self.link.waitReadable(timeout)
+
     # ---- outgoing -----------------------------------------------------------
     def sendWrench(self, force, torque=(0.0, 0.0, 0.0)):
         """Persistent wrench on the Gazebo needle link: SI units, Gazebo world frame."""
@@ -134,6 +151,10 @@ class RosLink(Sofa.Core.Controller):
 
     # ---- incoming -----------------------------------------------------------
     def onAnimateBeginEvent(self, event):
+        self.poll()
+
+    def poll(self):
+        """Handle every message that has arrived: events in order, then the newest state."""
         newest = {}
         for msg in self.link.receiveAll():
             msgType = msg['type']

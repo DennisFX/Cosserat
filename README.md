@@ -33,9 +33,9 @@ On top of upstream `ece9067`:
    - `NeedleInsertion.py`: `beamPath` is passed as the sliding point's mechanical object path without the leading `@`, as `PointsManager` expects.
 3. **ROS link.** `rosLink.py`, next to the scene, exchanges JSON messages over UDP with the ROS 2 bridge node: the Gazebo needle pose in, wrenches out (see [ROS link](#ros-link)).
 4. **Wrench monitor.** `wrenchMonitor.py`, next to the scene, computes the wrench at the needle base every step (see [Wrench monitor](#wrench-monitor)).
-5. **Rigid needle.** `NeedleInsertion.py` freezes the Cosserat strains with a `FixedProjectiveConstraint`, so the needle moves as one rigid body driven by its base. The scene declares the `Sofa.Component.Constraint.Projective` plugin that provides it. Remove the constraint line to get the flexible needle back. The needle also weighs 5 g (`PhysicsParams.mass`), like the Gazebo needle.
-6. **Gazebo coupling.** `gazeboCoupling.py`, next to the scene, makes the needle base follow the Gazebo needle and sends the base wrench back to it (see [Following the Gazebo needle](#following-the-gazebo-needle)).
-7. **Gel in a container.** `FemParams.box` in `cosserat/needle/params.py` holds the gel's x = 40 face (opposite the entry face) and its four side faces, instead of only the y = −8 face. In the Gazebo world the needle goes in from above, so the gel sits in a box on the ground with its top open. Held at the bottom only, a sideways push on the needle would tilt the whole 24 cm block instead of loading the gel around the needle.
+5. **Rigid or flexible needle.** A `FixedProjectiveConstraint` line in `NeedleInsertion.py` freezes the Cosserat strains, so the needle moves as one rigid body driven by its base; commented out, the needle is flexible. The scene declares the `Sofa.Component.Constraint.Projective` plugin either way. The choice matters: in the bottom-held gel the flexible needle bends and takes up about 60% of a sideways move, so the forces at its base are less than half the rigid needle's (see [Following the Gazebo needle](#following-the-gazebo-needle)). Check which one is active before comparing results. The needle also weighs 5 g (`PhysicsParams.mass`), like the Gazebo needle.
+6. **Gazebo coupling.** `gazeboCoupling.py`, next to the scene, makes the needle base follow the Gazebo needle and sends the base wrench back to it, with SOFA and Gazebo in lockstep on Gazebo's clock (see [Following the Gazebo needle](#following-the-gazebo-needle)).
+7. **Gel held at its bottom.** `FemParams.box` in `cosserat/needle/params.py` holds the gel's x = 40 face (opposite the entry face), instead of the y = −8 face upstream holds. In the Gazebo world the needle goes in from above, so that face is the bottom of a block standing on the ground. A sideways push near the top tilts the whole 24 cm block, so the gel is soft sideways. The branch's history also has a container setting that holds the four side faces as well, about 30–75 times stiffer sideways (`git log -p -- examples/python3/cosserat/needle/params.py`).
 8. **Gel points follow the needle's own depth.** `cosserat/needle/needleController.py` attaches a gel point at the tip every 1.3 cm on the way in and removes them on the way out. Upstream decided when by measuring from the tip to the deepest gel point, which moves with the gel: when the inserted needle was moved sideways, the gel could shift that point far enough to attach a new one in deformed gel, leaving a permanent sideways force. Now each point's depth (the tip's scene x when it was attached) is remembered and the tip is compared with that, so sideways moves never add or remove points. Straight insertion and retraction behave as before. Each event is printed: `[needle] punctured at x = ...`, `[needle] gel point 2 added at x = ...`, `... removed ...`, `[needle] out of the gel`.
 
 The upstream example's keyboard handling is unchanged.
@@ -218,7 +218,7 @@ If keys don't seem to reach the scene, make sure the 3D view has focus and try h
 | Attribute | Meaning |
 |---|---|
 | `baseForce`, `baseTorque` | Wrench the needle holder applies **on** the needle, at the needle base, in the SOFA scene frame. Negate it to get what the tissue does to the needle. |
-| `sectionMoments` | Internal bending/twisting moment per section, `[torsion, bending y, bending z]` in the section's frame. Always 0 while the needle is rigid. |
+| `sectionMoments` | Internal bending/twisting moment per section, `[torsion, bending y, bending z]` in the section's frame. Always 0 with the rigid needle. |
 | `lateralForces` | Tissue force on the needle at each sliding-constraint point in the gel, needle-local `[y, z]`. |
 
 The scene is in cm, kg and s, so 100 force units are 1 N and 10⁴ torque units are 1 N·m.
@@ -249,13 +249,13 @@ Each datagram is one JSON object with a `type` field. All values are SI.
 | `type` | Direction | Fields | Effect |
 |---|---|---|---|
 | `joint_error` | in | `names`, `positions`, `stamp` | UR5 joint tracking errors. Not used at the moment: `rosLink.py` notes once that it has no handler for them. |
-| `base_pose` | in | `p` (m), `q` (x, y, z, w), `stamp` | Where the Gazebo needle base is, in the `sofa_scene` frame; used by the coupling |
-| `wrench` | out | `force`, `torque`, optional `frame` | Wrench applied to the Gazebo needle. Without `frame` it is in Gazebo's world frame; the coupling sends it in `sofa_scene` and the bridge rotates it. |
-| `clear` | out | none | Stops pushing on the Gazebo needle |
+| `base_pose` | in | `p` (m), `q` (x, y, z, w), `stamp` | Where the Gazebo needle base is, in the `sofa_scene` frame, and Gazebo's sim time for it (s); used by the coupling. The bridge sends one per TF update, 100 per second of sim time. |
+| `wrench` | out | `force`, `torque`, optional `frame` and `stamp` | Wrench applied to the Gazebo needle. Without `frame` it is in Gazebo's world frame; the coupling sends it in `sofa_scene` and the bridge rotates it. `stamp` is the Gazebo sim time it was computed for; Gazebo waits for stamped wrenches (lockstep). |
+| `clear` | out | none | Stops pushing on the Gazebo needle, and ends the lockstep |
 
 Ctrl+W sends a fixed test wrench (`testForce` in `rosLink.py`) and Ctrl+R sends `clear`. The ROS side sets the Gazebo wrench rather than adding to it, so pressing W again doesn't increase the force.
 
-- Incoming messages are read at the start of each step, so nothing is received while the scene is paused. Key presses are sent immediately, paused or not.
+- Incoming messages are read at the start of each step, so nothing is received while the scene is paused. Key presses are sent immediately, paused or not. Other components can also read them mid-step with `rosLink.waitForMessages(timeout)` and `rosLink.poll()`; the coupling does, while it waits for Gazebo.
 - Only one SOFA instance can run the scene at a time, since port 9871 can only be bound once. Reloading the scene in the same runSofa is fine.
 - New message types, keys and outgoing messages can be added from the scene without editing `rosLink.py`, through `rosLink.subscribe(...)`, `rosLink.bindKey(...)` and `rosLink.send(...)`. See the docstring at the top of the file.
 
@@ -265,7 +265,7 @@ To test it without ROS, start the scene and press Animate. Send it a needle pose
 python3 -c "import json, socket; socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(json.dumps({'type': 'base_pose', 'p': [0, 0, 0], 'q': [0, 0, 0, 1]}).encode(), ('127.0.0.1', 9871))"
 ```
 
-Then press Ctrl+G: SOFA should print `[coupling] following the Gazebo needle ...`, and a second later that no pose has arrived for 1 s. Press Ctrl+G again to stop. To see what SOFA sends, stop the ROS bridge if it's running (it holds port 9872), run `nc -ul 127.0.0.1 9872`, and press Ctrl+W in SOFA.
+Then press Ctrl+G: SOFA should print `[coupling] following the Gazebo needle ...`, and a second later that no pose has arrived for 1 s. (The pose has no `stamp`, so the coupling doesn't try to run in lockstep.) Press Ctrl+G again to stop. To see what SOFA sends, stop the ROS bridge if it's running (it holds port 9872), run `nc -ul 127.0.0.1 9872`, and press Ctrl+W in SOFA.
 
 ---
 
@@ -276,12 +276,10 @@ Then press Ctrl+G: SOFA should print `[coupling] following the Gazebo needle ...
 The scene's origin corresponds to the Gazebo needle base at a fixed **pre-insertion pose**, so at that pose both needles coincide. Press **Ctrl+G** with the arm there:
 
 - **Engaging is refused** if the Gazebo needle is more than 1 cm or about 6° from the SOFA needle, with a message giving the offset. Otherwise the arm's travel to the pre-insertion pose would drag the needle through the gel.
-- **While following**, the needle base rest pose moves toward the newest `base_pose` every step, by at most 0.5 cm and 0.05 rad per step, so a sudden jump can't hit the stiff base spring all at once. The arrow keys are overridden.
+- **While following**, the needle base rest pose moves toward the Gazebo pose for the step (see [Lockstep with Gazebo's clock](#lockstep-with-gazebos-clock)) every step, by at most 0.5 cm and 0.05 rad per step, so a sudden jump can't hit the stiff base spring all at once. The arrow keys are overridden.
 - **After every step**, the coupling sends the needle base wrench to Gazebo. That is minus the monitor's `baseForce` / `baseTorque` (what the needle does to its holder), converted to N and N·m. It goes out in the `sofa_scene` frame, and the bridge rotates it into the world frame.
 - **If that wrench passes 50 N or 10 N·m**, or isn't a number, it isn't sent and following stops, as with Ctrl+G. The scene has almost certainly gone unstable, and passing the wrench on would throw the arm around, which the needle would then follow. Reload the scene before coupling again.
 - **Ctrl+G again** stops following, sends a zero wrench, and leaves the needle where it is.
-
-If poses stop arriving while following, the needle holds the last one, and SOFA prints a warning after 1 s.
 
 Options, passed to `GazeboCoupling(...)` in `NeedleInsertion.py`:
 
@@ -291,6 +289,10 @@ Options, passed to `GazeboCoupling(...)` in `NeedleInsertion.py`:
 | `sendWrenches` | `True` | `False` follows Gazebo without pushing back |
 | `maxForce`, `maxTorque` | `50.0`, `10.0` | Safety cutoff on the wrench sent to Gazebo, after `wrenchGain` (N, N·m). The UR5's wrist gives way somewhere above ~100 N at the needle base. `float('inf')` for both turns the cutoff off; a wrench that isn't a number still stops the coupling. |
 | `maxStep`, `maxAngleStep` | `0.5`, `0.05` | Largest rest-pose change per step (scene units, rad) |
+| `lockstep` | `True` | Run on Gazebo's clock when poses are stamped; `False` follows the newest pose and sends unstamped wrenches, as before |
+| `maxWait` | `0.2` | s of wall time to wait for Gazebo's pose before taking a step without it |
+| `resyncAfter` | `0.1` | s of Gazebo time the clocks may drift apart before SOFA jumps to Gazebo's |
+| `staleAfter` | `1.0` | Without lockstep: s without a pose before warning |
 | `engageDistance`, `engageAngle` | `1.0`, `0.1` | How close the needles must be for Ctrl+G to engage (scene units, rad) |
 | `metersPerUnit`, `kgPerUnit` | `0.01`, `1.0` | Scene units; the defaults are cm and kg |
 | `key` | `'G'` | Toggle key, used with Ctrl. Avoid `F`: Ctrl+F makes runSofa fullscreen. |
@@ -299,8 +301,31 @@ Things to know:
 
 - **The SOFA needle's mass shows up in Gazebo.** The wrench includes the needle's inertia while the base accelerates. At 5 g, the same as the Gazebo needle, that push is small.
 - **Insert along the scene's x axis.** `needleController.py` adds and removes gel points as the tip moves along scene x, so insertions should keep the needle along its starting axis. Sideways moves at full depth are fine: they don't change the tip's x, so they never add or remove points.
-- **The scene is placed vertically in the Gazebo world.** The ROS side maps the scene's +x to world −Z, so the needle goes in from above, and the gel sits in a container (see [What this branch changes](#what-this-branch-changes)). runSofa still draws the scene in its own frame, with the needle horizontal.
-- **Keep sideways moves small.** The gel mesh is coarse (cells 4.8 × 3.2 × 2 cm along x, y, z) and nearly incompressible (Poisson ratio 0.48), and the container walls are 5 cm (z) and 8 cm (y) from the needle. Sideways moves of 3 and 5 mm work: 5 mm gives about 50 N along z and 25 N along y with the rigid needle, roughly 10 and 5 N/mm, and the coarse mesh couples the two (a move along z also pushes along y). 15 mm squashed the gel against the walls until the scene went unstable. A finer mesh around the needle would allow larger moves and reduce the coupling, at the cost of speed; a flexible needle (remove the `FixedProjectiveConstraint` line) would bend and take up much of the motion.
+- **The scene is placed vertically in the Gazebo world.** The ROS side maps the scene's +x to world −Z, so the needle goes in from above, and the gel stands on its x = 40 face (see [What this branch changes](#what-this-branch-changes)). runSofa still draws the scene in its own frame, with the needle horizontal.
+- **Sideways stiffness.** In the bottom-held gel, a 5 mm sideways move at full depth (5 cm into the gel) gives about 0.66 N along z and 0.83 N along y with the rigid needle (0.13 and 0.17 N/mm), and about 0.25 and 0.35 N with the flexible needle. The moment at the base is about 0.13 N·m with the rigid needle and 0.03–0.04 N·m with the flexible one.
+- **Keep sideways moves small in the container gel.** Its mesh is coarse (cells 4.8 × 3.2 × 2 cm along x, y, z) and nearly incompressible (Poisson ratio 0.48), and the container walls are 5 cm (z) and 8 cm (y) from the needle. Sideways moves of 3 and 5 mm work: 5 mm gives about 50 N along z and 25 N along y with the rigid needle, roughly 10 and 5 N/mm, and the coarse mesh couples the two (a move along z also pushes along y). 15 mm squashed the gel against the walls until the scene went unstable. A finer mesh around the needle would allow larger moves and reduce the coupling, at the cost of speed.
+
+### Lockstep with Gazebo's clock
+
+SOFA advances 0.01 s per step however long the step takes, so on its own the gel runs as fast as the computer allows: about 3 times faster than the arm on one test machine, half as fast on a slower one. While following, the coupling runs SOFA on Gazebo's clock instead:
+
+- At Ctrl+G, SOFA's next step starts at the sim time (`stamp`) of the newest `base_pose`, and each step after it covers the next 0.01 s of Gazebo time.
+- Before each step, SOFA waits until it has the Gazebo pose from the step's start (stamped within half a step of it), and drives the needle base toward that pose. A fast SOFA thus waits for Gazebo.
+- Each wrench is stamped with the Gazebo time at the end of its step. Gazebo's `SetLinkWrench` system doesn't let Gazebo get more than 0.02 s past the newest stamp, so a slow SOFA slows Gazebo down.
+
+Both then run at the pace of the slower one. The ROS side (`SetLinkWrench`, the bridge and the insertion services) is described in the ros2SOFA_medical README, under [Keep SOFA and Gazebo on one clock](https://github.com/DennisFX/ros2SOFA_medical#keep-sofa-and-gazebo-on-one-clock).
+
+What SOFA prints:
+
+| Message | Meaning |
+|---|---|
+| `[coupling] following the Gazebo needle and sending it the needle wrench, in lockstep with Gazebo's clock` | Coupled, with stamped poses coming in |
+| `[coupling] Gazebo's clock has not reached SOFA's for 0.2 s (paused?); holding the needle until it does` | No pose for the step within `maxWait`: Gazebo is paused or gone. SOFA steps on (about every 0.2 s) with the needle held and sends nothing. |
+| `[coupling] Gazebo is moving again` | Poses are coming again; lockstep continues |
+| `[coupling] Gazebo's clock is +3.20 s from SOFA's; continuing from Gazebo's` | The clocks were more than `resyncAfter` apart, usually because SOFA was paused longer than Gazebo waits for it (5 s). SOFA jumps to Gazebo's time. |
+| `[coupling] the Gazebo needle pose comes every 50 ms of Gazebo time, so SOFA follows it that coarsely` | Poses come less often than every step. SOFA then uses the newest pose it can get instead of waiting for one Gazebo isn't allowed to reach. Usually `robot_state_publisher` at its default 20 Hz; `ur5_gazebo.launch.py` sets it to publish every joint state. |
+
+Poses without a `stamp` (an older bridge, or a pose sent by hand) make the coupling follow the newest pose without lockstep, as it did before. In that mode, if poses stop arriving, the needle holds the last one and SOFA prints a warning after 1 s.
 
 ---
 
@@ -317,4 +342,5 @@ Things to know:
 | `Cannot set window position/size from settings` | First run with an empty `~/.config/SOFA`; disappears afterwards. |
 | `[MechanicalObject(MousePosition)] Invalid vOp operation` | Clicking in the 3D view (mouse picking); doesn't affect the simulation. |
 | `[SceneCheckMultithreading] ... parallel implementation is available` | A suggestion, not an error. |
+| `[rosLink] no handler for "joint_error" messages, ignoring them` | The bridge forwards the arm's joint errors, which the scene doesn't use; printed once. |
 | Deprecation warnings during compilation | SOFA API deprecations; they don't affect the build. |
