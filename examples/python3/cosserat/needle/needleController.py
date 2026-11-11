@@ -26,7 +26,12 @@ class Animation(Sofa.Core.Controller):
         self.contactListener = args[1]
         self.generic = args[2]
         self.entryPoint = []
+        # Puncture when the needle-gel contacts together push this hard: the solver's units,
+        # force * dt in 0.01 N, so 3 N at dt = 0.01
         self.threshold = 3.0  # \lamba_1
+        # Constraint lines per contact: FrictionContactConstraint with mu > 0 (as in
+        # NeedleInsertion.py) gives the normal, then two tangential lines; 1 without friction
+        self.linesPerContact = 3
 
         self.constraintPointsNode = args[3]
         self.pointManager = self.constraintPointsNode.pointsManager
@@ -52,6 +57,15 @@ class Animation(Sofa.Core.Controller):
         """Scene x of the needle tip: how far it has gone along the insertion axis."""
         return float(self.needleSlidingState.position.array()[-1][0])
 
+    def contactNormals(self):
+        """Normal force of each needle-gel contact, in the solver's units (force * dt).
+
+        Outside the gel the contacts are the only constraints, so their lines are all of
+        constraintForces, linesPerContact per contact, the normal first.
+        """
+        forces = np.asarray(self.generic.constraintForces.value, dtype=float)
+        return forces[::self.linesPerContact]
+
     def leaveGel(self):
         self.inside = False
         self.needleCollisionModel.findData("activated").value = True
@@ -61,11 +75,12 @@ class Animation(Sofa.Core.Controller):
 
     def onAnimateEndEvent(self, event):
         if self.contactListener.getContactPoints() and not self.inside:
-            # @Info: check if the contact force is large enough to go through the tissue
-            if (
-                self.generic.constraintForces
-                and self.generic.constraintForces[0] > self.threshold
-            ):
+            # @Info: check if the contact force is large enough to go through the tissue. All
+            # contacts together: the tip often touches more than one triangle (e.g. on the edge
+            # between two), and the first contact alone then reaches the threshold only once
+            # the needle pushes several times as hard.
+            normals = self.contactNormals()
+            if normals.sum() > self.threshold:
                 # 1. @Info: Save the entryPoint and contact force
                 vec = self.contactListener.getContactPoints()[0][1]
                 self.entryPoint = [vec[0], vec[1], vec[2]]
@@ -82,7 +97,9 @@ class Animation(Sofa.Core.Controller):
                 self.pointManager.addNewPointToState()
                 self.inside = True
                 self.pointDepths = [self.tipX()]
-                print(f"[needle] punctured at x = {self.pointDepths[0]:.2f}", flush=True)
+                force = 0.01 * normals.sum() / self.rootNode.dt.value  # N
+                print(f"[needle] punctured at x = {self.pointDepths[0]:.2f}, {force:.2f} N on "
+                      f"{np.count_nonzero(normals > 0)} contact(s)", flush=True)
 
             elif self.tipForce[0] > self.threshold:
                 pass

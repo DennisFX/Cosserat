@@ -35,8 +35,11 @@ On top of upstream `ece9067`:
 4. **Wrench monitor.** `wrenchMonitor.py`, next to the scene, computes the wrench at the needle base every step (see [Wrench monitor](#wrench-monitor)).
 5. **Rigid or flexible needle.** A `FixedProjectiveConstraint` line in `NeedleInsertion.py` freezes the Cosserat strains, so the needle moves as one rigid body driven by its base; commented out, the needle is flexible. The scene declares the `Sofa.Component.Constraint.Projective` plugin either way. The choice matters: in the bottom-held gel the flexible needle bends and takes up about 60% of a sideways move, so the forces at its base are less than half the rigid needle's (see [Following the Gazebo needle](#following-the-gazebo-needle)). Check which one is active before comparing results. The needle also weighs 5 g (`PhysicsParams.mass`), like the Gazebo needle.
 6. **Gazebo coupling.** `gazeboCoupling.py`, next to the scene, makes the needle base follow the Gazebo needle and sends the base wrench back to it, with SOFA and Gazebo in lockstep on Gazebo's clock (see [Following the Gazebo needle](#following-the-gazebo-needle)).
-7. **Gel held at its bottom.** `FemParams.box` in `cosserat/needle/params.py` holds the gel's x = 40 face (opposite the entry face), instead of the y = −8 face upstream holds. In the Gazebo world the needle goes in from above, so that face is the bottom of a block standing on the ground. A sideways push near the top tilts the whole 24 cm block, so the gel is soft sideways. The branch's history also has a container setting that holds the four side faces as well, about 30–75 times stiffer sideways (`git log -p -- examples/python3/cosserat/needle/params.py`).
-8. **Gel points follow the needle's own depth.** `cosserat/needle/needleController.py` attaches a gel point at the tip every 1.3 cm on the way in and removes them on the way out. Upstream decided when by measuring from the tip to the deepest gel point, which moves with the gel: when the inserted needle was moved sideways, the gel could shift that point far enough to attach a new one in deformed gel, leaving a permanent sideways force. Now each point's depth (the tip's scene x when it was attached) is remembered and the tip is compared with that, so sideways moves never add or remove points. Straight insertion and retraction behave as before. Each event is printed: `[needle] punctured at x = ...`, `[needle] gel point 2 added at x = ...`, `... removed ...`, `[needle] out of the gel`.
+7. **Gel held at its bottom.** `FemParams.box` in `cosserat/needle/params.py` holds the gel's x = 40 face (opposite the entry face), instead of the y = −8 face upstream holds. In the Gazebo world the needle goes in from above, so that face is the bottom of a block standing on the ground. With one uniform soft gel, a sideways push near the top tilted the whole 24 cm block, so the gel was soft sideways; the two-layer gel (item 10) is mostly hard layer and tilts far less. The branch's history also has a container setting that holds the four side faces as well, about 30–75 times stiffer sideways (`git log -p -- examples/python3/cosserat/needle/params.py`).
+8. **Gel points follow the needle's own depth.** `cosserat/needle/needleController.py` attaches a gel point at the tip every 1.3 cm on the way in and removes them on the way out. Upstream decided when by measuring from the tip to the deepest gel point, which moves with the gel: when the inserted needle was moved sideways, the gel could shift that point far enough to attach a new one in deformed gel, leaving a permanent sideways force. Now each point's depth (the tip's scene x when it was attached) is remembered and the tip is compared with that, so sideways moves never add or remove points. Straight insertion and retraction behave as before. Each event is printed: `[needle] punctured at x = 16.40, 3.02 N on 2 contact(s)`, `[needle] gel point 2 added at x = ...`, `... removed ...`, `[needle] out of the gel`.
+9. **Friction along the shaft.** `CosseratNeedleSlidingConstraint` (C++) can hold each gel point along the needle as well as sideways, with Coulomb stick-slip, and `shaftFriction.py` sets each point's friction from a friction per cm of shaft in the gel. Upstream held the points sideways only, so once through the surface nothing resisted the needle along its axis. See [Friction along the shaft](#friction-along-the-shaft).
+10. **Two-layer gel.** `createFemRegularGrid.py` gives the gel a soft top layer (the subcutaneous tissue) and a 10 times stiffer layer from 2.4 cm down, drawn red, on a mesh refined in depth. See [Two layers](#two-layers).
+11. **Puncture on the total contact force.** `needleController.py` lets the needle through when the normal forces of all its contacts with the gel add up to the threshold. Upstream compared only the first contact's, so when the load was shared between contacts the needle pushed harder before puncturing: about 6 N instead of 3 N in the two-layer gel. The puncture force depended on how the tip met the mesh. See [Puncture](#puncture).
 
 The upstream example's keyboard handling is unchanged.
 
@@ -211,6 +214,72 @@ If keys don't seem to reach the scene, make sure the 3D view has focus and try h
 
 ---
 
+## Tissue model
+
+What acts on the needle, in order of insertion. The parameters are in `examples/python3/cosserat/needle/params.py`. Forces are in scene units (0.01 N), lengths in cm.
+
+### Puncture
+
+Until it punctures, the needle touches the gel's surface through collision contacts (`FrictionContactConstraint`, μ = 0.1). After every step, `needleController.py` adds up the contacts' normal forces and lets the needle through once they reach `threshold`. The threshold is 3.0 in the solver's units (force × dt), which is 3 N at the scene's dt = 0.01. The contacts are then switched off and the first gel point is attached at the tip.
+
+- `linesPerContact` (3) tells the controller where each contact's normal force is: with friction the solver has a normal and two tangential lines per contact. Set it to 1 if the contact response's μ is set to 0.
+- With the two-layer gel the needle punctures after about 2 mm of indentation, and the force at the base peaks at about 3 N.
+- The tip has no cutting force inside the gel. Once through, only the gel points act on the needle, so crossing into the hard layer gives no second puncture.
+
+### Gel points
+
+Inside the gel, a gel point is attached at the tip every `ConstraintsParams.constraintDistance` (1.3 cm) and removed again on the way out (see item 8 above). `CosseratNeedleSlidingConstraint` holds each point on the needle axis with two lines, needle-local y and z. With friction it adds a third line along the needle, so each point has `[y, z]` or `[y, z, axial]` lines.
+
+### Friction along the shaft
+
+Along the needle, a gel point sticks to the shaft until holding it there takes more than
+
+    friction[i] + frictionCoefficient × |sideways force at point i|
+
+and then slides, with that force opposing the slip. The needle feels the opposite force, which reaches the base wrench and Gazebo. `NeedleFrictionResolution` (in `CosseratNeedleSlidingConstraint.h`) solves each point's three lines together, in the same Gauss-Seidel loop as the rest of the scene.
+
+`ShaftFriction` (in `shaftFriction.py`) sets `friction[i]` before every step from a friction per cm of shaft in the gel. The shaft from the entry point to the tip is split between the points at the midpoints between them, and each point gets its share. The total is `frictionPerLength` × the inserted length, so the friction grows smoothly with depth instead of jumping at each new point. Points ahead of the tip, which happens while retracting, get none.
+
+| Parameter (`ConstraintsParams`) | Default | Meaning |
+|---|---|---|
+| `frictionPerLength` | `20.0` | Friction per cm of shaft in the gel, scene units: 0.2 N/cm, 1 N at 5 cm. A placeholder, chosen to be visible next to the 3 N puncture; calibrate it before quoting numbers. |
+| `frictionCoefficient` | `0.0` | Coulomb coefficient on each point's sideways force |
+
+Both 0: the constraint builds only the original two lines per point, as upstream.
+
+The constraint's data, for use in other scenes:
+
+| Data | Meaning |
+|---|---|
+| `friction` | Friction limit per gel point, scene units: one value for all points, or one per point (points past the end of the list get none). Empty (the default): no friction line, unless `frictionCoefficient` is set. |
+| `frictionCoefficient` | Adds `frictionCoefficient` × the sideways force at each point to its limit |
+| `useDirections` | Sideways lines to build, needle-local y and z. The first entry is ignored: friction adds the line along the needle. |
+
+What it does in the insert-sweep-retract cycle (rigid needle, 2026-11-11; insertion and retraction measured in the uniform gel, and the same in the two-layer gel):
+
+- **Insertion:** the force along the needle grows by about 0.195 N/cm, to about 1 N at full depth. That is slightly under 0.2 because the friction drags the entry point down a couple of mm.
+- **Sweep:** static friction holds that force, but each sideways move changes it. In the two-layer gel, 15 mm moves swing it to about −0.8 N, close to the friction limit, so the points probably slide along the needle during the moves.
+- **Retraction:** the force flips to about −1 N within about 0.1 s, then shrinks to 0 as the tip leaves the gel.
+
+### Two layers
+
+`createFemCubeWithParams` (in `cosserat/createFemRegularGrid.py`) builds a soft top layer and, from `hardDepth` below the top surface (x = 16) down to the bottom, a hard one. A `BoxROI` picks the tetrahedra that lie entirely in the hard layer at rest. An `IndexValueMapper` gives them `hardYoungModulus` and every other tetrahedron `youngModulus`, and `TetrahedronFEMForceField` takes one modulus per tetrahedron. A second `BoxROI` splits the outer surface into two visual models, one per colour. `IndexValueMapper` comes from `Sofa.Component.Engine.Transform`, which is now in the scene's plugin list.
+
+| Parameter (`FemParams`) | Default | Meaning |
+|---|---|---|
+| `youngModulus` | `100` | Soft top layer, the subcutaneous tissue. Scene units are 100 Pa, so this is 10 kPa. |
+| `hardYoungModulus` | `1000` | Hard layer, 100 kPa. Set it equal to `youngModulus` for one uniform gel. |
+| `hardDepth` | `2.4` | cm below the top surface where the hard layer starts: halfway along the 5 cm insertion |
+| `softColor`, `hardColor` | blue, red | RGBA, see-through |
+| `mesh` | `"21 6 6"` | Nodes along x (depth), y, z: cells 1.2 × 3.2 × 2 cm |
+
+- **`hardDepth` must fall on a row of nodes**, a multiple of the cell depth (1.2 cm). Otherwise the layer starts at the next row down, and the scene prints `[gel] no node plane 2.5 cm deep (cells 1.2 cm deep): the hard layer starts at 3.6 cm`.
+- **The mesh is finer than before.** The old cells were 4.8 cm deep, so the whole 5 cm insertion sat within the top row of cells and there was nowhere to put a boundary. The gel now has 3000 tetrahedra instead of 750, so SOFA steps more slowly; in lockstep, Gazebo then waits for it.
+- **To get the old gel back**, set `hardYoungModulus = 100` and `mesh = "6 6 6"`. `hardYoungModulus = 100` alone gives a uniform gel on the new mesh, which is the fair baseline for the layered one, since the finer mesh alone changes the stiffness too.
+- **With the rigid needle** the two-layer gel is about 0.80 N/mm sideways along scene z (world X) and 1.18 N/mm along scene y (world Y), 6–7 times the old uniform gel's 0.13 / 0.17 N/mm. How much of that comes from the finer mesh rather than the hard layer hasn't been measured; the uniform baseline above would tell.
+
+---
+
 ## Wrench monitor
 
 `WrenchMonitor` (in `wrenchMonitor.py`) runs after every step and updates these attributes. It prints nothing; other controllers, such as the Gazebo coupling, read them.
@@ -219,7 +288,9 @@ If keys don't seem to reach the scene, make sure the 3D view has focus and try h
 |---|---|
 | `baseForce`, `baseTorque` | Wrench the needle holder applies **on** the needle, at the needle base, in the SOFA scene frame. Negate it to get what the tissue does to the needle. |
 | `sectionMoments` | Internal bending/twisting moment per section, `[torsion, bending y, bending z]` in the section's frame. Always 0 with the rigid needle. |
-| `lateralForces` | Tissue force on the needle at each sliding-constraint point in the gel, needle-local `[y, z]`. |
+| `lateralForces` | Force the gel applies on the needle at each gel point, needle-local `[y, z]`. Before the friction change it had the opposite sign (the force on the gel). |
+| `axialForces` | The same along the needle (shaft friction), + toward the tip. Zeros without friction. |
+| `frictionForce` | `axialForces` summed: the total shaft friction on the needle |
 
 The scene is in cm, kg and s, so 100 force units are 1 N and 10⁴ torque units are 1 N·m.
 
@@ -230,7 +301,7 @@ The monitor only needs numpy; SOFA's pixi environment has no scipy.
 Things to know when reading the numbers:
 
 - **Short blips on each keypress** are the needle's inertia while the base catches up with the new rest position. They scale with `PhysicsParams.mass` (5 g).
-- **No axial force once inside the gel.** The sliding constraint ignores the needle axis, so the model has no friction along the shaft; the only axial resistance is at puncture. Moving the inserted needle sideways is what loads it: a sideways force at the base and a bending moment, whose ratio is the distance from the base to where the gel pushes back.
+- **Along the needle, only friction once inside the gel.** After the puncture the gel resists the needle along its axis only through shaft friction (see [Friction along the shaft](#friction-along-the-shaft)). Moving the inserted needle sideways is what loads it most: a sideways force at the base and a bending moment, whose ratio is the distance from the base to where the gel pushes back.
 - **To check the monitor**, uncomment the two `ConstantForceField` lines in `NeedleInsertion.py`. They apply 1 N sideways at the tip, 15 cm from the base. Once settled, `baseForce` should be ≈ (0, −100, 0) and `baseTorque` ≈ (0, 0, −1500); print them from a controller to see them.
 
 ---
@@ -302,8 +373,8 @@ Things to know:
 - **The SOFA needle's mass shows up in Gazebo.** The wrench includes the needle's inertia while the base accelerates. At 5 g, the same as the Gazebo needle, that push is small.
 - **Insert along the scene's x axis.** `needleController.py` adds and removes gel points as the tip moves along scene x, so insertions should keep the needle along its starting axis. Sideways moves at full depth are fine: they don't change the tip's x, so they never add or remove points.
 - **The scene is placed vertically in the Gazebo world.** The ROS side maps the scene's +x to world −Z, so the needle goes in from above, and the gel stands on its x = 40 face (see [What this branch changes](#what-this-branch-changes)). runSofa still draws the scene in its own frame, with the needle horizontal.
-- **Sideways stiffness.** In the bottom-held gel, a 5 mm sideways move at full depth (5 cm into the gel) gives about 0.66 N along z and 0.83 N along y with the rigid needle (0.13 and 0.17 N/mm), and about 0.25 and 0.35 N with the flexible needle. The moment at the base is about 0.13 N·m with the rigid needle and 0.03–0.04 N·m with the flexible one.
-- **Keep sideways moves small in the container gel.** Its mesh is coarse (cells 4.8 × 3.2 × 2 cm along x, y, z) and nearly incompressible (Poisson ratio 0.48), and the container walls are 5 cm (z) and 8 cm (y) from the needle. Sideways moves of 3 and 5 mm work: 5 mm gives about 50 N along z and 25 N along y with the rigid needle, roughly 10 and 5 N/mm, and the coarse mesh couples the two (a move along z also pushes along y). 15 mm squashed the gel against the walls until the scene went unstable. A finer mesh around the needle would allow larger moves and reduce the coupling, at the cost of speed.
+- **Sideways stiffness.** In the two-layer gel, a 15 mm sideways move at full depth (5 cm into the gel) gives about 12 N along z and 17.7 N along y with the rigid needle (0.80 and 1.18 N/mm), with about 1.9 and 2.55 N·m at the base. In the earlier uniform gel, a 5 mm move gave about 0.66 N along z and 0.83 N along y with the rigid needle (0.13 and 0.17 N/mm), and about 0.25 and 0.35 N with the flexible needle. The moment at the base was then about 0.13 N·m with the rigid needle and 0.03–0.04 N·m with the flexible one.
+- **Keep sideways moves small in the container gel.** Its mesh was coarse when it was tried (cells 4.8 × 3.2 × 2 cm along x, y, z) and nearly incompressible (Poisson ratio 0.48), and the container walls are 5 cm (z) and 8 cm (y) from the needle. Sideways moves of 3 and 5 mm work: 5 mm gives about 50 N along z and 25 N along y with the rigid needle, roughly 10 and 5 N/mm, and the coarse mesh couples the two (a move along z also pushes along y). 15 mm squashed the gel against the walls until the scene went unstable. A finer mesh around the needle would allow larger moves and reduce the coupling, at the cost of speed.
 
 ### Lockstep with Gazebo's clock
 
