@@ -92,6 +92,7 @@ pluginList = [
     "Sofa.Component.Constraint.Lagrangian.Correction",
     "Sofa.Component.Constraint.Lagrangian.Solver",
     "Sofa.Component.Engine.Select",
+    "Sofa.Component.Engine.Transform",
     "Sofa.GL.Component.Rendering3D",
     "Sofa.Component.Setting",
     "Sofa.Component.SceneUtility",

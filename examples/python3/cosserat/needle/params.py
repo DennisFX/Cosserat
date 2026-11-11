@@ -22,13 +22,20 @@ class PhysicsParams:
 
 @dataclass
 class FemParams:
-    youngModulus: float = 100
+    # Two layers: a soft one on top (subcutaneous tissue) and a hard one from hardDepth below
+    # the top surface (x = minVol[0]) down to the bottom. Moduli in scene units, 100 Pa: 100 is
+    # 10 kPa. hardYoungModulus = youngModulus gives one uniform gel.
+    youngModulus: float = 100  # soft top layer
+    hardYoungModulus: float = 1000  # hard layer, 10 times stiffer
+    hardDepth: float = 2.4  # cm: halfway along the 5 cm insertion; must be on a node plane
+    softColor: string = "0.0 0.1 0.9 0.40"  # blue, see-through
+    hardColor: string = "0.85 0.25 0.2 0.55"  # red
     poissonRatio: float = 0.48
     mass: float = 0.3
     rayleigh: float = 0.1
     minVol: string = "16. -8. -5."
     maxVol: string = "40. 8. 5."
-    mesh: string = "6 6 6"
+    mesh: string = "21 6 6"  # nodes along x (depth), y, z: 1.2 cm cells in depth, a plane at 2.4 cm
     box: string = "39 -10 -10 41 10 10"
 
 @dataclass
