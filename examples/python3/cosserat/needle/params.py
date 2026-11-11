@@ -63,3 +63,8 @@ class NeedleParameters:
 class ConstraintsParams:
     constraintDistance: float = 1.3  # distance between two constraint points
     entryForce: float = 0.3  # The required force to penetrate the volume
+    # Friction along the shaft (see examples/needle/shaftFriction.py). frictionPerLength is
+    # in scene units, 0.01 N per cm of shaft in the gel: 20 is 0.2 N/cm, 1 N at 5 cm depth.
+    # frictionCoefficient adds mu * |sideways force| at each gel point. Both 0: no friction.
+    frictionPerLength: float = 20.0
+    frictionCoefficient: float = 0.0

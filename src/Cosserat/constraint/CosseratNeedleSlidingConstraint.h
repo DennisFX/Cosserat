@@ -33,6 +33,10 @@
 #include <sofa/defaulttype/VecTypes.h>
 #include <sofa/helper/OptionsGroup.h>
 #include <sofa/core/behavior/Constraint.h>
+#include <sofa/core/behavior/ConstraintResolution.h>
+
+#include <algorithm>
+#include <cmath>
 
 namespace sofa::component::constraintset
 {
@@ -47,7 +51,85 @@ namespace sofa::component::constraintset
     using sofa::core::MultiVecDerivId ;
 
     /**
-     * This class contains common implementation of cable constraints
+     * Gauss-Seidel resolution of one gel point with shaft friction: nbLateral sideways lines
+     * (bilateral: the point stays on the needle axis) followed by one line along the needle
+     * (Coulomb stick-slip). Along the needle the point sticks to the shaft until holding it
+     * there would take more than
+     *     limit + mu * |sideways force|,
+     * then slides with that force opposing the slip. Forces are in the solver's units
+     * (impulses, force * dt), and so is limit.
+     */
+    class NeedleFrictionResolution : public sofa::core::behavior::ConstraintResolution
+    {
+    public:
+        /// nbLateral: 0, 1 or 2 sideways lines before the axial one
+        NeedleFrictionResolution(unsigned int nbLateral, SReal limit, SReal mu)
+            : ConstraintResolution(nbLateral + 1),
+              m_nbLateral(nbLateral),
+              m_limit(std::max(limit, SReal(0))),
+              m_mu(std::max(mu, SReal(0)))
+        {}
+
+        void init(int line, SReal **w, SReal * /*force*/) override
+        {
+            // Inverse of the sideways block of the compliance matrix
+            m_invW[0][0] = m_invW[0][1] = m_invW[1][0] = m_invW[1][1] = 0;
+            if (m_nbLateral == 2)
+            {
+                const SReal a = w[line][line], b = w[line][line + 1];
+                const SReal c = w[line + 1][line], e = w[line + 1][line + 1];
+                const SReal det = a * e - b * c;
+                if (std::abs(det) > SReal(1e-12) * std::abs(a * e))
+                {
+                    m_invW[0][0] = e / det;
+                    m_invW[0][1] = -b / det;
+                    m_invW[1][0] = -c / det;
+                    m_invW[1][1] = a / det;
+                    return;
+                }
+            }
+            for (unsigned int k = 0; k < m_nbLateral; k++)
+                if (w[line + k][line + k] != 0)
+                    m_invW[k][k] = 1 / w[line + k][line + k];
+        }
+
+        void resolution(int line, SReal **w, SReal *d, SReal *force, SReal * /*dFree*/) override
+        {
+            const int axial = line + static_cast<int>(m_nbLateral);
+
+            // 1. Sideways: the force that puts the point back on the needle axis
+            SReal delta[2] = {0, 0};
+            for (unsigned int a = 0; a < m_nbLateral; a++)
+                for (unsigned int b = 0; b < m_nbLateral; b++)
+                    delta[a] -= m_invW[a][b] * d[line + b];
+
+            SReal dAxial = d[axial];
+            SReal lateral2 = 0;
+            for (unsigned int a = 0; a < m_nbLateral; a++)
+            {
+                force[line + a] += delta[a];
+                dAxial += w[axial][line + a] * delta[a];  // its effect on the slip
+                lateral2 += force[line + a] * force[line + a];
+            }
+
+            // 2. Along the needle: the force that stops the slip (stick), at most the limit (slip)
+            const SReal wAxial = w[axial][axial];
+            const SReal stick = (wAxial > 0) ? force[axial] - dAxial / wAxial : SReal(0);
+            const SReal bound = m_limit + m_mu * std::sqrt(lateral2);
+            force[axial] = std::clamp(stick, -bound, bound);
+        }
+
+    private:
+        unsigned int m_nbLateral;
+        SReal m_limit;
+        SReal m_mu;
+        SReal m_invW[2][2]{};
+    };
+
+    /**
+     * Holds the gel points (the constraint points in the FEM) on the needle. Each point gets
+     * one line per sideways direction (needle-local y and z), and, with friction, a third line
+     * along the needle: lines are [y, z] or [y, z, axial] per point, in point order.
      */
     template <class DataTypes>
     class CosseratNeedleSlidingConstraint : public Constraint<DataTypes>
@@ -121,6 +203,8 @@ namespace sofa::component::constraintset
         Data<unsigned int> d_valueIndex;
         Data<helper::OptionsGroup> d_valueType;
         Data<type::Vec<3, bool>> d_useDirections;
+        Data<type::vector<Real>> d_friction;
+        Data<Real> d_frictionCoefficient;
         // displacement = the constraint will impose the displacement provided in data d_inputValue[d_iputIndex]
         // force = the constraint will impose the force provided in data d_inputValue[d_iputIndex]
 
@@ -137,6 +221,11 @@ namespace sofa::component::constraintset
         using Constraint<DataTypes>::d_constraintIndex;
 
         void internalInit();
+
+        /// True when each point gets a line along the needle (friction or frictionCoefficient set)
+        bool hasAxialLine() const;
+        /// Friction limit of point i, in scene force units
+        Real frictionLimit(unsigned int i) const;
     };
 
     // Declares template as extern to avoid the code generation of the template for

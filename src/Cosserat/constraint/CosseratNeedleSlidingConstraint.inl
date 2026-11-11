@@ -62,7 +62,17 @@ namespace sofa::component::constraintset
                              "displacement = the contstraint will impose the displacement provided in data value[valueIndex] \n"
                              "force = the contstraint will impose the force provided in data value[valueIndex] \n"
                              "If unspecified, the default value is displacement")),
-        d_useDirections(initData(&d_useDirections, type::Vec<3, bool>(0, 1, 1), "useDirections", "Directions to constrain.\n"))
+        d_useDirections(initData(&d_useDirections, type::Vec<3, bool>(0, 1, 1), "useDirections",
+                                 "Sideways directions to constrain (needle-local y and z). The first entry\n"
+                                 "is ignored: the direction along the needle is constrained by friction.\n")),
+        d_friction(initData(&d_friction, "friction",
+                            "Friction along the needle at each gel point: the largest force (scene units)\n"
+                            "that keeps the point stuck to the shaft before it slides. One value for all\n"
+                            "points, or one per point (points past the end of the list get none).\n"
+                            "Empty (the default) with frictionCoefficient 0: no friction.\n")),
+        d_frictionCoefficient(initData(&d_frictionCoefficient, Real(0), "frictionCoefficient",
+                                       "Coulomb coefficient: adds frictionCoefficient * |sideways force| at\n"
+                                       "the point to its friction limit.\n"))
   {}
 
   template <class DataTypes>
@@ -104,6 +114,23 @@ namespace sofa::component::constraintset
   }
 
   template <class DataTypes>
+  bool CosseratNeedleSlidingConstraint<DataTypes>::hasAxialLine() const
+  {
+    return !d_friction.getValue().empty() || d_frictionCoefficient.getValue() > 0;
+  }
+
+  template <class DataTypes>
+  typename CosseratNeedleSlidingConstraint<DataTypes>::Real
+  CosseratNeedleSlidingConstraint<DataTypes>::frictionLimit(unsigned int i) const
+  {
+    const auto &friction = d_friction.getValue();
+    if (friction.empty())
+      return 0;
+    const Real limit = (friction.size() == 1) ? friction[0] : (i < friction.size() ? friction[i] : 0);
+    return std::max(limit, Real(0));
+  }
+
+  template <class DataTypes>
   void CosseratNeedleSlidingConstraint<DataTypes>::buildConstraintMatrix(const ConstraintParams *cParams, DataMatrixDeriv &cMatrix, unsigned int &cIndex, const DataVecCoord &x)
   {
     if (d_componentState.getValue() != ComponentState::Valid)
@@ -111,11 +138,15 @@ namespace sofa::component::constraintset
 
     SOFA_UNUSED(cParams);
     MatrixDeriv &matrix = *cMatrix.beginEdit();
-    VecCoord positions = x.getValue();
+    const VecCoord &positions = x.getValue();
     d_constraintIndex.setValue(cIndex);
 
-    type::Vec<3, bool> use = d_useDirections.getValue();
+    const type::Vec<3, bool> use = d_useDirections.getValue();
+    const bool axial = hasAxialLine();
 
+    // Lines per point: [y, z] or [y, z, axial]. The mapped point is
+    // (0, t1.(P - proj), t2.(P - proj)), so y and z are its distance to the needle axis; x
+    // is always 0, but its velocity is the gel point's slip along the needle.
     for (unsigned int i = 0; i < positions.size(); i++)
     {
       if (use[1])
@@ -128,44 +159,41 @@ namespace sofa::component::constraintset
         MatrixDerivRowIterator c_it = matrix.writeLine(cIndex++);
         c_it.addCol(i, Coord(0, 0, 1));
       }
+      if (axial)
+      {
+        MatrixDerivRowIterator c_it = matrix.writeLine(cIndex++);
+        c_it.addCol(i, Coord(1, 0, 0));
+      }
     }
     cMatrix.endEdit();
     m_nbLines = cIndex - d_constraintIndex.getValue();
-    
   }
 
   template <class DataTypes>
   void CosseratNeedleSlidingConstraint<DataTypes>::getConstraintViolation(const ConstraintParams *cParams,
                                                                           BaseVector *resV, const DataVecCoord &x, const DataVecDeriv &v)
-  //    void CosseratNeedleSlidingConstraint<DataTypes>::getConstraintViolation(const ConstraintParams* cParams,
-  //                                                                        BaseVector *resV,
-  //                                                                        const BaseVector *Jdx)
   {
     if (d_componentState.getValue() != ComponentState::Valid)
       return;
-    
-    SOFA_UNUSED(cParams);
-    SOFA_UNUSED(x);
-    SOFA_UNUSED(v);
-    //ReadAccessor<Data<VecCoord>> positions = this->mstate->readPositions();
-    const VecCoord positions = x.getValue();
-    type::Vec<3, bool> use = d_useDirections.getValue();
-    const auto& constraintIndex = d_constraintIndex.getValue();
 
+    SOFA_UNUSED(cParams);
+    SOFA_UNUSED(v);
+    // x is the free position: the position at the start of the step plus the free motion.
+    // Along the needle that is 0 + (slip velocity) * dt, the slip the step would make
+    // without friction.
+    const VecCoord &positions = x.getValue();
+    const type::Vec<3, bool> use = d_useDirections.getValue();
+    const bool axial = hasAxialLine();
+
+    unsigned int line = d_constraintIndex.getValue();
     for (unsigned int i = 0; i < positions.size(); i++)
     {
-      if (use[0]){
-        Real dfree0 = positions[i][0];
-        resV->set(constraintIndex + 2 * i, dfree0);
-      }
-      if (use[1]){
-        Real dfree1 = positions[i][1];
-        resV->set(constraintIndex + 2 * i, dfree1);
-      }
-      if (use[2]){
-        Real dfree2 = positions[i][2];
-        resV->set(constraintIndex + 2 * i + 1, dfree2);
-      }
+      if (use[1])
+        resV->set(line++, positions[i][1]);
+      if (use[2])
+        resV->set(line++, positions[i][2]);
+      if (axial)
+        resV->set(line++, positions[i][0]);
     }
   }
 
@@ -175,13 +203,28 @@ namespace sofa::component::constraintset
                                                                            unsigned int &offset)
   {
     ReadAccessor<Data<VecCoord>> positions = this->mstate->readPositions();
-    type::Vec<3, bool> use = d_useDirections.getValue();
+    const type::Vec<3, bool> use = d_useDirections.getValue();
+
+    if (!hasAxialLine())
+    {
+      for (size_t i = 0; i < positions.size(); i++)
+      {
+        if (use[1])
+          resTab[offset++] = new BilateralConstraintResolution();
+        if (use[2])
+          resTab[offset++] = new BilateralConstraintResolution();
+      }
+      return;
+    }
+
+    // The solver's forces are impulses (force * dt), so the limits are too
+    const SReal dt = this->getContext()->getDt();
+    const unsigned int nbLateral = static_cast<unsigned int>(use[1]) + static_cast<unsigned int>(use[2]);
+    const SReal mu = d_frictionCoefficient.getValue();
     for (size_t i = 0; i < positions.size(); i++)
     {
-      if (use[1])
-        resTab[offset++] = new BilateralConstraintResolution();
-      if (use[2])
-        resTab[offset++] = new BilateralConstraintResolution();
+      resTab[offset] = new NeedleFrictionResolution(nbLateral, frictionLimit(i) * dt, mu);
+      offset += nbLateral + 1;
     }
   }
 

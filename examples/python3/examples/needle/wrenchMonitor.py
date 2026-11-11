@@ -27,8 +27,11 @@ Results are refreshed after every time step and exposed as attributes:
                            what a force/torque sensor in the holder would read)
     sectionMoments         (nbSections, 3) internal moments per section,
                            [torsion, bending y, bending z], local section frame
-    lateralForces          (nbConstraintPoints, 2) tissue forces on the needle
-                           at each sliding point, needle-local [y, z]
+    lateralForces          (nbConstraintPoints, 2) force the gel applies on the
+                           needle at each gel point, needle-local [y, z]
+    axialForces            (nbConstraintPoints,) the same along the needle (shaft
+                           friction, + toward the tip); zeros without friction
+    frictionForce          axialForces summed: total shaft friction on the needle
 
 Units follow the scene (cm, kg, s): force = kg.cm/s^2 = 0.01 N,
 moment = kg.cm^2/s^2 = 1e-4 N.m.
@@ -99,12 +102,14 @@ class WrenchMonitor(Sofa.Core.Controller):
         self.baseTorque = np.zeros(3)
         self.sectionMoments = np.zeros((0, 3))
         self.lateralForces = np.zeros((0, 2))
+        self.axialForces = np.zeros(0)
+        self.frictionForce = 0.0
 
     def onAnimateEndEvent(self, event):
         self.baseForce, self.baseTorque = self.computeBaseWrench()
         self.sectionMoments = self.computeSectionMoments()
-        self.lateralForces = self.computeLateralForces()
-
+        self.lateralForces, self.axialForces = self.computeTissueForces()
+        self.frictionForce = float(self.axialForces.sum())
 
     def computeBaseWrench(self):
         """Wrench the holder applies on the needle: spring reaction minus Rayleigh damping.
@@ -128,15 +133,25 @@ class WrenchMonitor(Sofa.Core.Controller):
         k0 = np.asarray(self.strainMO.rest_position.value, dtype=float)
         return (k - k0) * self.K
 
-    def computeLateralForces(self):
-        """Tissue forces from CosseratNeedleSlidingConstraint (2 lines per point: y, z)."""
+    def computeTissueForces(self):
+        """Gel forces on the needle from CosseratNeedleSlidingConstraint, per gel point.
+
+        The constraint has [y, z] lines per point, or [y, z, axial] with friction (its
+        friction data set, or frictionCoefficient > 0). A line's force pushes the gel point
+        along the line's direction and the needle the other way, hence the minus sign.
+        """
+        none = (np.zeros((0, 2)), np.zeros(0))
         if self.solver is None or self.sliding is None or self.distanceMO is None:
-            return np.zeros((0, 2))
+            return none
         nPts = len(self.distanceMO.position.value)
+        axial = (len(self.sliding.friction.value) > 0
+                 or float(self.sliding.frictionCoefficient.value) > 0.0)
+        perPoint = 3 if axial else 2
         lam = np.asarray(self.solver.constraintForces.value, dtype=float)
         start = int(self.sliding.constraintIndex.value)
-        if nPts == 0 or lam.size < start + 2 * nPts:
-            return np.zeros((0, 2))
+        if nPts == 0 or lam.size < start + perPoint * nPts:
+            return none
         # SOFA stores dt * lambda in constraintForces, so divide by dt to get forces
         dt = self.rootNode.dt.value
-        return lam[start:start + 2 * nPts].reshape(nPts, 2) / dt
+        forces = -lam[start:start + perPoint * nPts].reshape(nPts, perPoint) / dt
+        return forces[:, :2], (forces[:, 2] if axial else np.zeros(nPts))
