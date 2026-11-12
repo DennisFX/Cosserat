@@ -21,7 +21,9 @@ While following:
   - if that wrench exceeds maxForce or maxTorque (or is not finite), it is not sent and
     following stops: the scene has almost certainly gone unstable, and passing the
     wrench on would throw the arm around, which the needle would then follow.
-Turning it off sends a zero wrench and leaves the needle where it is.
+Stopping sends a zero wrench ("clear", with reason "limit" for the cutoff or "key" for
+Ctrl+G) and leaves the needle where it is. On "limit", the ROS side (sofa_ros_interaction)
+drops the motion it is running and takes the arm back to the pre-insertion pose.
 
 Lockstep (lockstep=True, the default): SOFA and Gazebo run on the same clock, whatever
 either machine's speed. Each pose from ROS carries Gazebo's sim time ("stamp"). On
@@ -140,7 +142,7 @@ class GazeboCoupling(Sofa.Core.Controller):
     # ---- on / off -----------------------------------------------------------
     def toggle(self):
         if self.following:
-            self.stop()
+            self.stop('key')
             return
         if self.target is None:
             print('[coupling] no needle pose from ROS yet. Is sofa_bridge running, with the '
@@ -164,11 +166,13 @@ class GazeboCoupling(Sofa.Core.Controller):
             what += ', in lockstep with Gazebo\'s clock'
         print(f'[coupling] {what} (Ctrl+{self.key} to stop)', flush=True)
 
-    def stop(self):
+    def stop(self, reason='key', detail=''):
+        """Stop following. reason: 'key' (Ctrl+G) or 'limit' (wrench cutoff), sent to ROS."""
         self.following = False
         self._stamp = None
         if self.sendWrenches:
-            self.rosLink.send('clear')  # no stamp: also releases Gazebo from the lockstep
+            # No stamp: also releases Gazebo from the lockstep
+            self.rosLink.send('clear', reason=reason, detail=detail)
         print('[coupling] stopped following; the needle stays where it is', flush=True)
 
     # ---- each step ----------------------------------------------------------
@@ -208,10 +212,11 @@ class GazeboCoupling(Sofa.Core.Controller):
         torque = -np.asarray(self.monitor.baseTorque, dtype=float) * self.torqueToSI * gain
         f, t = np.linalg.norm(force), np.linalg.norm(torque)
         if not (np.isfinite(f) and np.isfinite(t)) or f > self.maxForce or t > self.maxTorque:
-            print(f'[coupling] base wrench |F| = {f:.3g} N, |T| = {t:.3g} N.m is over the limit '
-                  f'({self.maxForce:g} N, {self.maxTorque:g} N.m), not sending it. The scene has '
-                  f'probably gone unstable: reload it before coupling again.', flush=True)
-            self.stop()
+            detail = (f'base wrench |F| = {f:.3g} N, |T| = {t:.3g} N.m, over the limit '
+                      f'({self.maxForce:g} N, {self.maxTorque:g} N.m)')
+            print(f'[coupling] {detail}, not sending it. The scene has probably gone unstable: '
+                  f'reload it before coupling again.', flush=True)
+            self.stop('limit', detail)
             return
         fields = dict(frame=self.frame, force=force.tolist(), torque=torque.tolist())
         if stamp is not None:

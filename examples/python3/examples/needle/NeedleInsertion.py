@@ -141,4 +141,4 @@ def createScene(rootNode):
     # so the wrench it sends is the one computed this step. See gazeboCoupling.py.
     rootNode.addObject(GazeboCoupling(name="gazeboCoupling", rosLink=rosLink,
                                       monitor=wrenchMonitor, needle=needle,
-                                      maxForce=float('inf'), maxTorque=float('inf')))  # no cutoff
+                                      maxForce=float('50'), maxTorque=float('50')))  # no cutoff
