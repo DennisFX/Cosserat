@@ -49,30 +49,47 @@ def createFemCube(parentNode):
     return FemNode
 
 
-def hardLayerBox(geometry):
-    """BoxROI box of the hard layer (scene coordinates, as a string), or None for one gel.
+def hardLayerTop(geometry):
+    """Scene x of the top of the hard layer, or None for one uniform gel.
 
     The layer runs from geometry.hardDepth below the top surface (x = minVol[0]) to the
-    bottom. Elements count as in it when all their nodes are (BoxROI strict), so the layer
-    starts on the first node plane at or below hardDepth.
+    bottom. Elements count as in it when all their nodes are (see hardLayerBox), so it starts
+    on the first node plane at or below hardDepth. Shaft friction (shaftFriction.py) uses
+    this too, to tell which part of the needle is in which layer.
     """
     hardModulus = getattr(geometry, 'hardYoungModulus', geometry.youngModulus)
     depth = getattr(geometry, 'hardDepth', 0.0)
-    lo = [float(v) for v in geometry.minVol.split()]
-    hi = [float(v) for v in geometry.maxVol.split()]
-    if hardModulus == geometry.youngModulus or not 0.0 < depth < hi[0] - lo[0]:
+    lo = float(geometry.minVol.split()[0])
+    hi = float(geometry.maxVol.split()[0])
+    if hardModulus == geometry.youngModulus or not 0.0 < depth < hi - lo:
         return None
     nx = int(geometry.mesh.split()[0])
-    dx = (hi[0] - lo[0]) / (nx - 1)
+    dx = (hi - lo) / (nx - 1)
     planes = depth / dx
     first = round(planes) if abs(planes - round(planes)) < 1e-6 else math.ceil(planes)
     if first >= nx - 1:
         return None
-    if first != round(planes):
+    return lo + first * dx
+
+
+def hardLayerBox(geometry):
+    """BoxROI box of the hard layer (scene coordinates, as a string), or None for one gel.
+
+    From hardLayerTop down to the bottom, a little wider than the gel. With BoxROI strict, the
+    elements in it are those with all their nodes at or below the hard layer's top.
+    """
+    top = hardLayerTop(geometry)
+    if top is None:
+        return None
+    lo = [float(v) for v in geometry.minVol.split()]
+    hi = [float(v) for v in geometry.maxVol.split()]
+    dx = (hi[0] - lo[0]) / (int(geometry.mesh.split()[0]) - 1)
+    depth = geometry.hardDepth
+    if abs(top - (lo[0] + depth)) > 1e-6 * dx:
         print(f'[gel] no node plane {depth} cm deep (cells {dx:.3g} cm deep): the hard layer '
-              f'starts at {first * dx:.3g} cm')
+              f'starts at {top - lo[0]:.3g} cm')
     margin = 1e-3 * dx
-    box = [lo[0] + depth - margin, lo[1] - 1.0, lo[2] - 1.0, hi[0] + 1.0, hi[1] + 1.0, hi[2] + 1.0]
+    box = [top - margin, lo[1] - 1.0, lo[2] - 1.0, hi[0] + 1.0, hi[1] + 1.0, hi[2] + 1.0]
     return ' '.join(f'{v:.9g}' for v in box)
 
 

@@ -8,7 +8,7 @@ from cosserat.needle.needleController import Animation
 from cosserat.needle.params import NeedleParameters, GeometryParams, PhysicsParams, FemParams, ContactParams, \
     ConstraintsParams
 from cosserat.usefulFunctions import pluginList
-from cosserat.createFemRegularGrid import createFemCubeWithParams
+from cosserat.createFemRegularGrid import createFemCubeWithParams, hardLayerTop
 from cosserat.cosseratObject import Cosserat
 from useful.utils import addConstraintPoint
 from rosLink import RosLink
@@ -118,13 +118,15 @@ def createScene(rootNode):
                                 input2=inputNeedleMo, output=outputDistanceMo, direction="@../../FramesMO.position")
 
     # Shaft friction: sets the constraint's friction at each gel point before every step, from
-    # a friction per cm of shaft in the gel. ConstraintsParams.frictionPerLength = 0 turns it
-    # off. See shaftFriction.py.
+    # a friction per cm of shaft in each gel layer. ConstraintsParams.frictionPerLength and
+    # hardFrictionPerLength = 0 turn it off. See shaftFriction.py.
     rootNode.addObject(ShaftFriction(name="shaftFriction",
                                      constraint=distanceStatsNode.computeDistanceComponent,
                                      needlePoints=slidingPoint.slidingPointMO,
                                      gelPoints=constraintPointNode.constraintPointsMo,
-                                     perLength=ConstraintsParams.frictionPerLength))
+                                     perLength=ConstraintsParams.frictionPerLength,
+                                     hardPerLength=ConstraintsParams.hardFrictionPerLength,
+                                     hardLayerTop=hardLayerTop(FemParams)))
 
     # Must stay last: it looks up computeDistanceComponent by name, created just above
     wrenchMonitor = rootNode.addObject(WrenchMonitor(
