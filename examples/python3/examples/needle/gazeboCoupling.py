@@ -5,7 +5,9 @@ Couples the SOFA needle to the Gazebo needle, through rosLink.py and the ros2sof
     Gazebo --base_pose--> SOFA:   the needle base follows the Gazebo needle base
     SOFA   --wrench-----> Gazebo: the wrench the SOFA needle puts on its holder
 
-Ctrl+G turns following on and off (runSofa only passes keys on while Ctrl is held).
+Ctrl+G turns following on and off (runSofa only passes keys on while Ctrl is held). On
+starting, it sends ROS sceneInfo ("scene": what the scene built, e.g. its gel and needle;
+NeedleInsertion.describeScene), which sofa_ros_interaction writes into its recordings.
 
 Following only starts when the Gazebo needle is already where the SOFA needle is
 (within engageDistance and engageAngle), i.e. with the arm at the pre-insertion pose.
@@ -90,6 +92,7 @@ class GazeboCoupling(Sofa.Core.Controller):
         self.engageAngle = kwargs.get('engageAngle', 0.1)        # rad
         self.wrenchGain = kwargs.get('wrenchGain', 1.0)          # >1 exaggerates it in Gazebo
         self.sendWrenches = kwargs.get('sendWrenches', True)
+        self.sceneInfo = dict(kwargs.get('sceneInfo') or {})   # text fields, sent on Ctrl+G
         # Safety cutoff on the wrench sent to Gazebo (after wrenchGain). The UR5's wrist joints
         # give way somewhere above ~100 N at the needle base.
         self.maxForce = kwargs.get('maxForce', 50.0)             # N
@@ -159,6 +162,8 @@ class GazeboCoupling(Sofa.Core.Controller):
             return
         self.following = True
         self._anchor, self._steps, self._stamp, self._stalled = None, 0, None, False
+        if self.sendWrenches and self.sceneInfo:
+            self.rosLink.send('scene', **self.sceneInfo)  # before the first wrench
         what = 'following the Gazebo needle'
         if self.sendWrenches:
             what += ' and sending it the needle wrench'

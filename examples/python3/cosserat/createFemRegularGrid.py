@@ -49,13 +49,14 @@ def createFemCube(parentNode):
     return FemNode
 
 
-def hardLayerTop(geometry):
-    """Scene x of the top of the hard layer, or None for one uniform gel.
+def layerBoundary(geometry):
+    """Scene x of the boundary between the two gel layers, or None for one uniform gel.
 
-    The layer runs from geometry.hardDepth below the top surface (x = minVol[0]) to the
-    bottom. Elements count as in it when all their nodes are (see hardLayerBox), so it starts
-    on the first node plane at or below hardDepth. Shaft friction (shaftFriction.py) uses
-    this too, to tell which part of the needle is in which layer.
+    The upper layer runs from the top surface (x = minVol[0]) down to geometry.hardDepth, the
+    lower one from there to the bottom; geometry.hardOnTop says which of them is the hard one.
+    Elements count as in the lower layer when all their nodes are (see lowerLayerBox), so the
+    boundary is the first node plane at or below hardDepth. Shaft friction (shaftFriction.py)
+    uses this too, to tell which part of the needle is in which layer.
     """
     hardModulus = getattr(geometry, 'hardYoungModulus', geometry.youngModulus)
     depth = getattr(geometry, 'hardDepth', 0.0)
@@ -72,13 +73,13 @@ def hardLayerTop(geometry):
     return lo + first * dx
 
 
-def hardLayerBox(geometry):
-    """BoxROI box of the hard layer (scene coordinates, as a string), or None for one gel.
+def lowerLayerBox(geometry):
+    """BoxROI box of the lower gel layer (scene coordinates, as a string), or None for one gel.
 
-    From hardLayerTop down to the bottom, a little wider than the gel. With BoxROI strict, the
-    elements in it are those with all their nodes at or below the hard layer's top.
+    From layerBoundary down to the bottom, a little wider than the gel. With BoxROI strict, the
+    elements in it are those with all their nodes at or below the boundary.
     """
-    top = hardLayerTop(geometry)
+    top = layerBoundary(geometry)
     if top is None:
         return None
     lo = [float(v) for v in geometry.minVol.split()]
@@ -86,8 +87,8 @@ def hardLayerBox(geometry):
     dx = (hi[0] - lo[0]) / (int(geometry.mesh.split()[0]) - 1)
     depth = geometry.hardDepth
     if abs(top - (lo[0] + depth)) > 1e-6 * dx:
-        print(f'[gel] no node plane {depth} cm deep (cells {dx:.3g} cm deep): the hard layer '
-              f'starts at {top - lo[0]:.3g} cm')
+        print(f'[gel] no node plane {depth} cm deep (cells {dx:.3g} cm deep): the layers '
+              f'meet at {top - lo[0]:.3g} cm')
     margin = 1e-3 * dx
     box = [top - margin, lo[1] - 1.0, lo[2] - 1.0, hi[0] + 1.0, hi[1] + 1.0, hi[2] + 1.0]
     return ' '.join(f'{v:.9g}' for v in box)
@@ -115,17 +116,22 @@ def createFemCubeWithParams(parentNode, geometry):
     gelNode.addObject('SparseLDLSolver', name='precond', template="CompressedRowSparseMatrixMat3x3d")
     gelNode.addObject('TetrahedronSetTopologyContainer', src="@../gelVolume/TetraContainer", name='container')
     gelNode.addObject('MechanicalObject', name='tetras', template='Vec3d')
-    hardBox = hardLayerBox(geometry)
+    lowerBox = lowerLayerBox(geometry)
+    # The upper and the lower layer's modulus and colour: soft on top unless hardOnTop
+    soft = (geometry.youngModulus, getattr(geometry, 'softColor', "0.0 0.1 0.9 0.40"))
+    hard = (getattr(geometry, 'hardYoungModulus', geometry.youngModulus),
+            getattr(geometry, 'hardColor', "0.85 0.25 0.2 0.55"))
+    upper, lower = (hard, soft) if getattr(geometry, 'hardOnTop', False) else (soft, hard)
     youngModulus = geometry.youngModulus
-    if hardBox is not None:
-        # One modulus per tetrahedron: hardYoungModulus inside the hard layer (at rest),
-        # youngModulus elsewhere. Before the FEM, so the moduli are there for its init.
-        gelNode.addObject('BoxROI', name='hardLayer', box=hardBox, strict=True, doUpdate=False,
+    if lowerBox is not None:
+        # One modulus per tetrahedron: the lower layer's inside the lower layer (at rest), the
+        # upper one's elsewhere. Before the FEM, so the moduli are there for its init.
+        gelNode.addObject('BoxROI', name='lowerLayer', box=lowerBox, strict=True, doUpdate=False,
                           computeEdges=False, computeTriangles=False, computeQuads=False,
                           computeHexahedra=False)
-        gelNode.addObject('IndexValueMapper', name='youngModuli', indices='@hardLayer.tetrahedronIndices',
-                          value=geometry.hardYoungModulus, defaultValue=geometry.youngModulus,
-                          inputValues=[float(geometry.youngModulus)])
+        gelNode.addObject('IndexValueMapper', name='youngModuli',
+                          indices='@lowerLayer.tetrahedronIndices', value=lower[0],
+                          defaultValue=upper[0], inputValues=[float(upper[0])])
         youngModulus = '@youngModuli.outputValues'
     gelNode.addObject('TetrahedronFEMForceField', template='Vec3d', name='FEM', method='large',
                       poissonRatio=geometry.poissonRatio, youngModulus=youngModulus)
@@ -139,22 +145,20 @@ def createFemCubeWithParams(parentNode, geometry):
     surfaceNode.addObject('TriangleCollisionModel', name='surface')
     surfaceNode.addObject('LineCollisionModel', name='line')
     surfaceNode.addObject('BarycentricMapping')
-    softColor = getattr(geometry, 'softColor', "0.0 0.1 0.9 0.40")
-    if hardBox is None:
+    if lowerBox is None:
         visu = surfaceNode.addChild("visu")
-        visu.addObject("OglModel", name="Visual", src="@../surfContainer", color=softColor)
+        visu.addObject("OglModel", name="Visual", src="@../surfContainer", color=soft[1])
         visu.addObject("BarycentricMapping", input="@..", output="@Visual")
     else:
-        # The outer surface in two colours: the hard layer's triangles in hardColor
-        surfaceNode.addObject('BoxROI', name='hardSurface', box=hardBox, strict=True, doUpdate=False,
-                              computeEdges=False, computeQuads=False, computeTetrahedra=False,
-                              computeHexahedra=False)
-        for name, triangles, color in (("visu", "trianglesOutROI", softColor),
-                                       ("visuHard", "trianglesInROI",
-                                        getattr(geometry, 'hardColor', "0.85 0.25 0.2 0.55"))):
+        # The outer surface in two colours, each layer's triangles in its material's colour
+        surfaceNode.addObject('BoxROI', name='lowerSurface', box=lowerBox, strict=True,
+                              doUpdate=False, computeEdges=False, computeQuads=False,
+                              computeTetrahedra=False, computeHexahedra=False)
+        for name, triangles, color in (("visu", "trianglesOutROI", upper[1]),
+                                       ("visuLower", "trianglesInROI", lower[1])):
             visu = surfaceNode.addChild(name)
             visu.addObject("OglModel", name="Visual", position="@../surfContainer.position",
-                           triangles="@../hardSurface." + triangles, color=color)
+                           triangles="@../lowerSurface." + triangles, color=color)
             visu.addObject("BarycentricMapping", input="@..", output="@Visual")
 
     gelNode.addObject('LinearSolverConstraintCorrection')

@@ -35,11 +35,12 @@ On top of upstream `ece9067`:
 4. **Wrench monitor.** `wrenchMonitor.py`, next to the scene, computes the wrench at the needle base every step (see [Wrench monitor](#wrench-monitor)).
 5. **Rigid or flexible needle.** A `FixedProjectiveConstraint` line in `NeedleInsertion.py` freezes the Cosserat strains, so the needle moves as one rigid body driven by its base; commented out, the needle is flexible. The scene declares the `Sofa.Component.Constraint.Projective` plugin either way. The choice matters: in the bottom-held gel the flexible needle bends and takes up about 60% of a sideways move, so the forces at its base are less than half the rigid needle's (see [Following the Gazebo needle](#following-the-gazebo-needle)). Check which one is active before comparing results. The needle also weighs 5 g (`PhysicsParams.mass`), like the Gazebo needle.
 6. **Gazebo coupling.** `gazeboCoupling.py`, next to the scene, makes the needle base follow the Gazebo needle and sends the base wrench back to it, with SOFA and Gazebo in lockstep on Gazebo's clock (see [Following the Gazebo needle](#following-the-gazebo-needle)). If the wrench goes over its safety limit, it stops and tells ROS why, and the ROS side takes the arm back to the pre-insertion pose.
-7. **Gel held at its bottom.** `FemParams.box` in `cosserat/needle/params.py` holds the gel's x = 40 face (opposite the entry face), instead of the y = −8 face upstream holds. In the Gazebo world the needle goes in from above, so that face is the bottom of a block standing on the ground. With one uniform soft gel, a sideways push near the top tilted the whole 24 cm block, so the gel was soft sideways; the two-layer gel (item 10) is mostly hard layer and tilts far less. The branch's history also has a container setting that holds the four side faces as well, about 30–75 times stiffer sideways (`git log -p -- examples/python3/cosserat/needle/params.py`).
+7. **Gel held at its bottom.** `FemParams.box` in `cosserat/needle/params.py` holds the gel's x = 40 face (opposite the entry face), instead of the y = −8 face upstream holds. In the Gazebo world the needle goes in from above, so that face is the bottom of a block standing on the ground. With one uniform soft gel, a sideways push near the top tilted the whole 24 cm block, so the gel was soft sideways; the two-layer gel (item 10) is mostly hard layer and tilts far less. With the hard layer on top instead, the block is mostly soft again and nearly as soft sideways as the uniform gel. The branch's history also has a container setting that holds the four side faces as well, about 30–75 times stiffer sideways (`git log -p -- examples/python3/cosserat/needle/params.py`).
 8. **Gel points follow the needle's own depth.** `cosserat/needle/needleController.py` attaches a gel point at the tip every 1.3 cm on the way in and removes them on the way out. Upstream decided when by measuring from the tip to the deepest gel point, which moves with the gel: when the inserted needle was moved sideways, the gel could shift that point far enough to attach a new one in deformed gel, leaving a permanent sideways force. Now each point's depth (the tip's scene x when it was attached) is remembered and the tip is compared with that, so sideways moves never add or remove points. Straight insertion and retraction behave as before. Each event is printed: `[needle] punctured at x = 16.40, 3.02 N on 2 contact(s)`, `[needle] gel point 2 added at x = ...`, `... removed ...`, `[needle] out of the gel`.
 9. **Friction along the shaft.** `CosseratNeedleSlidingConstraint` (C++) can hold each gel point along the needle as well as sideways, with Coulomb stick-slip, and `shaftFriction.py` sets each point's friction from a friction per cm of shaft in each gel layer. Upstream held the points sideways only, so once through the surface nothing resisted the needle along its axis. See [Friction along the shaft](#friction-along-the-shaft).
-10. **Two-layer gel.** `createFemRegularGrid.py` gives the gel a soft top layer (the subcutaneous tissue) and a 10 times stiffer layer from 2.4 cm down, drawn red, on a mesh refined in depth. The shaft friction is 3 times higher in the hard layer, so the insertion force shows where the needle crosses into it. See [Two layers](#two-layers).
+10. **Two-layer gel.** `createFemRegularGrid.py` gives the gel a soft top layer (the subcutaneous tissue) and a 10 times stiffer layer from 2.4 cm down, drawn red, on a mesh refined in depth. The shaft friction is 3 times higher in the hard layer, so the insertion force shows where the needle crosses into it. `NEEDLE_LAYERS=hard-on-top` turns the layers the other way up. See [Two layers](#two-layers).
 11. **Puncture on the total contact force.** `needleController.py` lets the needle through when the normal forces of all its contacts with the gel add up to the threshold. Upstream compared only the first contact's, so when the load was shared between contacts the needle pushed harder before puncturing: about 6 N instead of 3 N in the two-layer gel. The puncture force depended on how the tip met the mesh. See [Puncture](#puncture).
+12. **Scene description for ROS.** At startup the scene prints the gel and needle it built, for example `[gel] soft on top: 10 kPa down to 2.4 cm, 100 kPa below; shaft friction 0.2 then 0.6 N/cm; rigid needle`. When following starts (Ctrl+G), the coupling sends the same to ROS as a `scene` message, and the ROS side writes it into each recording's header and plot. See [ROS link](#ros-link).
 
 The upstream example's keyboard handling is unchanged.
 
@@ -178,6 +179,12 @@ At startup, confirm this line appears:
 [SofaPython3] Added '/home/<user>/dev/Cosserat/examples/python3/' to sys.path
 ```
 
+and, a little later, what the scene built:
+
+```
+[gel] soft on top: 10 kPa down to 2.4 cm, 100 kPa below; shaft friction 0.2 then 0.6 N/cm; rigid needle
+```
+
 ### Shortcuts
 
 Add these to `~/.bashrc`:
@@ -190,6 +197,16 @@ alias runsofa_needle='runsofa ~/dev/Cosserat/examples/python3/examples/needle/Ne
 ```
 
 `runsofa <scene.py>` runs any scene, and `runsofa_needle` opens the needle scene. `runsofa` is a function rather than an alias because pixi has to run from `~/sofa`. The parentheses keep your terminal where it was, but they also mean scene paths must be absolute (`~/...` is fine).
+
+### Hard layer on top
+
+`NEEDLE_LAYERS` in the environment picks which gel layer is on top, without editing `params.py` (see [Two layers](#two-layers)):
+
+```bash
+NEEDLE_LAYERS=hard-on-top runsofa_needle   # or soft-on-top
+```
+
+Without it, `FemParams.hardOnTop` decides (`False`: soft on top). Any other value stops the scene with `NEEDLE_LAYERS=...: use soft-on-top or hard-on-top`. Setting it in front of the command works with the `runsofa` function above. With an alias that starts with `cd`, it would only reach `cd`; use `export NEEDLE_LAYERS=hard-on-top` instead, which stays set until `unset NEEDLE_LAYERS`. The `[gel]` line says which gel was built.
 
 ### After editing code
 
@@ -223,7 +240,7 @@ What acts on the needle, in order of insertion. The parameters are in `examples/
 Until it punctures, the needle touches the gel's surface through collision contacts (`FrictionContactConstraint`, μ = 0.1). After every step, `needleController.py` adds up the contacts' normal forces and lets the needle through once they reach `threshold`. The threshold is 3.0 in the solver's units (force × dt), which is 3 N at the scene's dt = 0.01. The contacts are then switched off and the first gel point is attached at the tip.
 
 - `linesPerContact` (3) tells the controller where each contact's normal force is: with friction the solver has a normal and two tangential lines per contact. Set it to 1 if the contact response's μ is set to 0.
-- With the two-layer gel the needle punctures after about 2 mm of indentation, and the force at the base peaks at about 3 N. A uniform gel on the same mesh (`hardYoungModulus = 100`) takes the same 3 N but about 8 mm: without the hard layer 2.4 cm below, the surface gives way more.
+- With the two-layer gel the needle punctures after about 2 mm of indentation, and the force at the base peaks at about 3 N. A uniform gel on the same mesh (`hardYoungModulus = 100`) takes the same 3 N but about 8 mm: without the hard layer 2.4 cm below, the surface gives way more. With the hard layer on top it takes about 4.5 mm, at 3.0 N (2026-11-18): the stiff top layer sinks into the soft gel beneath it.
 - The tip has no cutting force inside the gel. Once through, only the gel points act on the needle, so crossing into the hard layer gives no second puncture.
 
 ### Gel points
@@ -238,14 +255,14 @@ Along the needle, a gel point sticks to the shaft until holding it there takes m
 
 and then slides, with that force opposing the slip. The needle feels the opposite force, which reaches the base wrench and Gazebo. `NeedleFrictionResolution` (in `CosseratNeedleSlidingConstraint.h`) solves each point's three lines together, in the same Gauss-Seidel loop as the rest of the scene.
 
-`ShaftFriction` (in `shaftFriction.py`) sets `friction[i]` before every step from a friction per cm of shaft in each gel layer: `frictionPerLength` in the soft top layer, `hardFrictionPerLength` from the top of the hard layer down. The shaft from the entry point to the tip is split between the points at the midpoints between them, and each point gets the friction of its share; a share that crosses the layer boundary is split there. So the friction grows smoothly with depth instead of jumping at each new point, and its slope changes where the tip crosses into the hard layer, not when the next point is added. Points ahead of the tip, which happens while retracting, get none.
+`ShaftFriction` (in `shaftFriction.py`) sets `friction[i]` before every step from a friction per cm of shaft in each gel layer, each layer its material's: `frictionPerLength` in the soft layer and `hardFrictionPerLength` in the hard one, whichever is on top. `layerFriction()` in `NeedleInsertion.py` passes them to `ShaftFriction` as `perLength`, above the boundary, and `lowerPerLength`, below it. The shaft from the entry point to the tip is split between the points at the midpoints between them, and each point gets the friction of its share; a share that crosses the layer boundary is split there. So the friction grows smoothly with depth instead of jumping at each new point, and its slope changes where the tip crosses into the lower layer, not when the next point is added. Points ahead of the tip, which happens while retracting, get none.
 
-The boundary is where it is in the gel at rest, from `hardLayerTop()` in `createFemRegularGrid.py`, the same place the gel builder starts the hard layer; the gel near the needle moves a mm or two along it, which the friction ignores. A uniform gel (`hardYoungModulus = youngModulus`) has no hard layer, so `frictionPerLength` applies throughout.
+The boundary is where it is in the gel at rest, from `layerBoundary()` in `createFemRegularGrid.py`, the same place the gel builder puts it; the gel near the needle moves a mm or two along it, which the friction ignores. A uniform gel (`hardYoungModulus = youngModulus`) has no boundary, so `frictionPerLength` applies throughout.
 
 | Parameter (`ConstraintsParams`) | Default | Meaning |
 |---|---|---|
-| `frictionPerLength` | `20.0` | Friction per cm of shaft in the soft top layer, scene units: 0.2 N/cm. A placeholder, chosen to be visible next to the 3 N puncture; calibrate it before quoting numbers. |
-| `hardFrictionPerLength` | `60.0` | The same in the hard layer: 0.6 N/cm, so about 2 N at the 5 cm insertion (2.4 cm soft, 2.6 cm hard). Also a placeholder, 3 times the soft layer's so that the boundary shows. |
+| `frictionPerLength` | `20.0` | Friction per cm of shaft in the soft layer, wherever it is, scene units: 0.2 N/cm. A placeholder, chosen to be visible next to the 3 N puncture; calibrate it before quoting numbers. |
+| `hardFrictionPerLength` | `60.0` | The same in the hard layer: 0.6 N/cm, so about 2 N at the 5 cm insertion either way up (2.4 cm of the top layer, 2.6 cm of the other). Also a placeholder, 3 times the soft layer's so that the boundary shows. |
 | `frictionCoefficient` | `0.0` | Coulomb coefficient on each point's sideways force |
 
 All three 0: the constraint builds only the original two lines per point, as upstream.
@@ -264,24 +281,30 @@ What it does in the insert-sweep-retract cycle (two-layer gel, rigid needle, 202
 - **Sweep:** static friction holds that force, but each sideways move changes it. At c = 1, 15 mm moves swing it from +2 N to between about −1.1 and −1.4 N, and the moves back to the centre bring it back to between 0 and +1.7 N. At c = 0 the arm gives way along the needle, and it stays between about +0.9 and +1.7 N. With 0.2 N/cm throughout, the swings stopped at about −0.9 N, near that friction's 1 N limit, so the points probably slid along the needle then.
 - **Retraction:** the force flips to about −2 N within about 0.1 s, shrinks by about 0.6 N/cm until the tip leaves the hard layer (about 23.8 s) and by 0.2 N/cm after that, and reaches 0 as the tip leaves the gel.
 - **New gel points:** each time one is added, the force dips for one step, by about 0.1 N at 0.2 N/cm (measured in the uniform gel) and up to about 0.2 N in the hard layer. Probably the new point starts with no load while the previous point's share of the shaft, and so its limit, is halved.
+- **Hard layer on top** (2026-11-18, c = 0, from the recordings): going in, 0.56 N/cm through the hard layer and 0.18 N/cm below it; coming out, 0.22 N/cm and then 0.65 N/cm. With the soft layer on top, the same day's recordings give 0.20 and 0.60 N/cm both ways. When the hard layer is on top it reads under its 0.6 N/cm going in and over it coming out, because the friction counts the shaft from the entry point, and that point rides on the hard layer: going in, the friction pushes the layer down into the soft gel and shortens the shaft counted; coming out, it lifts it. The same give makes the force take about 4 mm of travel to turn round when the retraction starts from full depth (2.6 mm from 22 mm; 0.3 mm with soft on top). The sideways moves shift it less too: 1.3–1.7 N at the stops, against 0.9–1.7 N with soft on top.
+- **Only in the top layer** (22 mm into the gel, 2026-11-18, c = 0): with soft on top, each sideways move swings the force right across its friction limit, ±0.44 N, and the sweep ends at 0.08 N. With hard on top it stays between 0.8 and 1.1 N.
 
 ### Two layers
 
-`createFemCubeWithParams` (in `cosserat/createFemRegularGrid.py`) builds a soft top layer and, from `hardDepth` below the top surface (x = 16) down to the bottom, a hard one. A `BoxROI` picks the tetrahedra that lie entirely in the hard layer at rest. An `IndexValueMapper` gives them `hardYoungModulus` and every other tetrahedron `youngModulus`, and `TetrahedronFEMForceField` takes one modulus per tetrahedron. A second `BoxROI` splits the outer surface into two visual models, one per colour. `IndexValueMapper` comes from `Sofa.Component.Engine.Transform`, which is now in the scene's plugin list.
+`createFemCubeWithParams` (in `cosserat/createFemRegularGrid.py`) builds two layers that meet `hardDepth` below the top surface (x = 16): by default a soft one on top and a hard one down to the bottom, or the other way round with `hardOnTop`. A `BoxROI` picks the tetrahedra that lie entirely in the lower layer at rest. An `IndexValueMapper` gives them the lower layer's modulus and every other tetrahedron the upper one's, and `TetrahedronFEMForceField` takes one modulus per tetrahedron. A second `BoxROI` splits the outer surface into two visual models, each layer in its material's colour (soft blue, hard red, whichever is on top). `IndexValueMapper` comes from `Sofa.Component.Engine.Transform`, which is now in the scene's plugin list.
+
+Each layer keeps its material's modulus, colour and shaft friction wherever it is, and the boundary stays `hardDepth` below the surface. `NEEDLE_LAYERS=hard-on-top` sets `hardOnTop` for a run (see [Hard layer on top](#hard-layer-on-top)), and the `[gel]` line at startup says which gel was built.
 
 | Parameter (`FemParams`) | Default | Meaning |
 |---|---|---|
-| `youngModulus` | `100` | Soft top layer, the subcutaneous tissue. Scene units are 100 Pa, so this is 10 kPa. |
+| `youngModulus` | `100` | Soft layer (the subcutaneous tissue, on top by default). Scene units are 100 Pa, so this is 10 kPa. |
 | `hardYoungModulus` | `1000` | Hard layer, 100 kPa. Set it equal to `youngModulus` for one uniform gel. |
-| `hardDepth` | `2.4` | cm below the top surface where the hard layer starts: halfway along the 5 cm insertion |
+| `hardDepth` | `2.4` | cm below the top surface where the layers meet: halfway along the 5 cm insertion |
+| `hardOnTop` | `False` | `True`: the hard layer on top, the soft one below. `NEEDLE_LAYERS` overrides it. |
 | `softColor`, `hardColor` | blue, red | RGBA, see-through |
 | `mesh` | `"21 6 6"` | Nodes along x (depth), y, z: cells 1.2 × 3.2 × 2 cm |
 
-- **`hardDepth` must fall on a row of nodes**, a multiple of the cell depth (1.2 cm). Otherwise the layer starts at the next row down, and the scene prints `[gel] no node plane 2.5 cm deep (cells 1.2 cm deep): the hard layer starts at 3.6 cm`.
+- **`hardDepth` must fall on a row of nodes**, a multiple of the cell depth (1.2 cm). Otherwise the boundary moves to the next row down, and the scene prints `[gel] no node plane 2.5 cm deep (cells 1.2 cm deep): the layers meet at 3.6 cm`.
 - **The mesh is finer than before.** The old cells were 4.8 cm deep, so the whole 5 cm insertion sat within the top row of cells and there was nowhere to put a boundary. The gel now has 3000 tetrahedra instead of 750, so SOFA steps more slowly; in lockstep, Gazebo then waits for it.
 - **To get the old gel back**, set `hardYoungModulus = 100` and `mesh = "6 6 6"`. `hardYoungModulus = 100` alone gives a uniform gel on the new mesh, which is the fair baseline for the layered one, since the finer mesh alone changes the stiffness too.
 - **Don't make the hard layer much stiffer than the arm.** The gel's sideways stiffness grows almost in proportion to `hardYoungModulus` (next item), so along scene y it reaches the arm's 2 N/mm at about 1700, and the coupled loop with Gazebo goes unstable once the gel is much stiffer than the arm (2 N/mm sideways by default). `hardYoungModulus = 100000` made the arm oscillate by tens of cm even at c = 1, from when the first gel point landed in the hard layer (2026-11-12, with the wrench cutoff off). Raise it gradually from 1000, watching the c = 0 sideways deflection.
-- **With the rigid needle** the two-layer gel is about 0.80 N/mm sideways along scene z (world X) and 1.18 N/mm along scene y (world Y), 6–7 times the old uniform gel's 0.13 / 0.17 N/mm. The uniform gel on the new mesh (`hardYoungModulus = 100`, 2026-11-12) is 0.090 / 0.123 N/mm. So the finer mesh alone makes the gel about 30% softer, and the hard layer makes it about 9 times stiffer, nearly in proportion to its 10 times higher modulus: almost all of the sideways stiffness is the hard layer's.
+- **With the rigid needle** the two-layer gel is about 0.80 N/mm sideways along scene z (world X) and 1.18 N/mm along scene y (world Y), 6–7 times the old uniform gel's 0.13 / 0.17 N/mm. The uniform gel on the new mesh (`hardYoungModulus = 100`, 2026-11-12) is 0.090 / 0.123 N/mm. So the finer mesh alone makes the gel about 30% softer, and the hard layer makes it about 9 times stiffer, nearly in proportion to its 10 times higher modulus: with the soft layer on top, almost all of the sideways stiffness is the hard layer's, because it is the thick lower one (next item).
+- **The lower layer sets the sideways stiffness, whichever material it is.** The block is held at its bottom only, and 21.6 of its 24 cm are below the boundary, so a sideways push near the top bends the whole block. In the 2026-11-18 recordings (rigid needle, c = 0, force ÷ the tip's actual offset at the 15 mm stops, X / Y): soft on top, 0.44 / 0.58 N/mm with the tip 22 mm in, still in the soft layer, and 0.78 / 1.15 N/mm at 50 mm; hard on top, 0.083 / 0.111 N/mm at 22 mm and 0.104 / 0.131 N/mm at 50 mm, close to the uniform soft gel. With the hard layer on top the moment ÷ side force is about 21 cm (X) and 18 cm (Y), longer than the 15 cm needle: the stiff top layer resists the needle turning in it and adds a couple.
 
 ---
 
@@ -327,6 +350,7 @@ Each datagram is one JSON object with a `type` field. All values are SI.
 | `joint_error` | in | `names`, `positions`, `stamp` | UR5 joint tracking errors. Not used at the moment: `rosLink.py` notes once that it has no handler for them. |
 | `base_pose` | in | `p` (m), `q` (x, y, z, w), `stamp` | Where the Gazebo needle base is, in the `sofa_scene` frame, and Gazebo's sim time for it (s); used by the coupling. The bridge sends one per TF update, 100 per second of sim time. |
 | `wrench` | out | `force`, `torque`, optional `frame` and `stamp` | Wrench applied to the Gazebo needle. Without `frame` it is in Gazebo's world frame; the coupling sends it in `sofa_scene` and the bridge rotates it. `stamp` is the Gazebo sim time it was computed for; Gazebo waits for stamped wrenches (lockstep). |
+| `scene` | out | text fields, here `gel` and `needle` | What the scene built (`sceneInfo`), sent when following starts, before the first wrench. The bridge republishes it latched on `/sofa/scene`, and `sofa_ros_interaction` writes it into its recordings' header (`sofa gel`, `sofa needle`) and plot. |
 | `clear` | out | optional `reason` (`key` or `limit`) and `detail` | Stops pushing on the Gazebo needle and ends the lockstep. The coupling says why it stopped: `key` for Ctrl+G, `limit` for its wrench cutoff, with the wrench in `detail`. The bridge passes that on, and on `limit` the ROS side drops the motion it is running. Ctrl+R sends no reason. |
 
 Ctrl+W sends a fixed test wrench (`testForce` in `rosLink.py`) and Ctrl+R sends `clear`. The ROS side sets the Gazebo wrench rather than adding to it, so pressing W again doesn't increase the force.
@@ -352,9 +376,10 @@ Then press Ctrl+G: SOFA should print `[coupling] following the Gazebo needle ...
 The scene's origin corresponds to the Gazebo needle base at a fixed **pre-insertion pose**, so at that pose both needles coincide. Press **Ctrl+G** with the arm there:
 
 - **Engaging is refused** if the Gazebo needle is more than 1 cm or about 6° from the SOFA needle, with a message giving the offset. Otherwise the arm's travel to the pre-insertion pose would drag the needle through the gel.
+- **When following starts**, the coupling sends ROS the scene's description (`sceneInfo`: the gel and needle of the `[gel]` line) as a `scene` message, before the first wrench. `sofa_ros_interaction` writes it into its recordings.
 - **While following**, the needle base rest pose moves toward the Gazebo pose for the step (see [Lockstep with Gazebo's clock](#lockstep-with-gazebos-clock)) every step, by at most 0.5 cm and 0.05 rad per step, so a sudden jump can't hit the stiff base spring all at once. The arrow keys are overridden.
 - **After every step**, the coupling sends the needle base wrench to Gazebo. That is minus the monitor's `baseForce` / `baseTorque` (what the needle does to its holder), converted to N and N·m. It goes out in the `sofa_scene` frame, and the bridge rotates it into the world frame.
-- **If that wrench passes 50 N or 10 N·m**, or isn't a number, it isn't sent and following stops. The scene has almost certainly gone unstable, and passing the wrench on would throw the arm around, which the needle would then follow. The coupling sends a zero wrench and tells ROS why (`clear` with reason `limit`). `sofa_ros_interaction` then drops the motion it is running and takes the arm back to the pre-insertion pose. The SOFA needle stays where it stopped, in the gel, and SOFA keeps stepping. Ctrl+G won't engage again, since the two needles are now far apart: reload the scene.
+- **If that wrench passes `maxForce` or `maxTorque`** (50 N and 10 N·m by default; `NeedleInsertion.py` passes 50 N and 50 N·m), or isn't a number, it isn't sent and following stops. The scene has almost certainly gone unstable, and passing the wrench on would throw the arm around, which the needle would then follow. The coupling sends a zero wrench and tells ROS why (`clear` with reason `limit`). `sofa_ros_interaction` then drops the motion it is running and takes the arm back to the pre-insertion pose. The SOFA needle stays where it stopped, in the gel, and SOFA keeps stepping. Ctrl+G won't engage again, since the two needles are now far apart: reload the scene.
 - **Ctrl+G again** stops following, sends a zero wrench (`clear` with reason `key`), and leaves the needle where it is. A motion running on the ROS side carries on.
 
 Options, passed to `GazeboCoupling(...)` in `NeedleInsertion.py`:
@@ -363,6 +388,7 @@ Options, passed to `GazeboCoupling(...)` in `NeedleInsertion.py`:
 |---|---|---|
 | `wrenchGain` | `1.0` | Multiplies the wrench sent to Gazebo; raise it to make small tissue forces visible on the arm while checking directions |
 | `sendWrenches` | `True` | `False` follows Gazebo without pushing back |
+| `sceneInfo` | `{}` | Text fields describing the scene (`describeScene()` in `NeedleInsertion.py`: `gel` and `needle`), sent to ROS as a `scene` message when following starts. Empty: nothing is sent. |
 | `maxForce`, `maxTorque` | `50.0`, `10.0` | Safety cutoff on the wrench sent to Gazebo, after `wrenchGain` (N, N·m). The UR5's wrist gives way somewhere above ~100 N at the needle base. `float('inf')` for both turns the cutoff off; a wrench that isn't a number still stops the coupling. Check what `NeedleInsertion.py` passes. |
 | `maxStep`, `maxAngleStep` | `0.5`, `0.05` | Largest rest-pose change per step (scene units, rad) |
 | `lockstep` | `True` | Run on Gazebo's clock when poses are stamped; `False` follows the newest pose and sends unstamped wrenches, as before |
@@ -378,7 +404,7 @@ Things to know:
 - **The SOFA needle's mass shows up in Gazebo.** The wrench includes the needle's inertia while the base accelerates. At 5 g, the same as the Gazebo needle, that push is small.
 - **Insert along the scene's x axis.** `needleController.py` adds and removes gel points as the tip moves along scene x, so insertions should keep the needle along its starting axis. Sideways moves at full depth are fine: they don't change the tip's x, so they never add or remove points.
 - **The scene is placed vertically in the Gazebo world.** The ROS side maps the scene's +x to world −Z, so the needle goes in from above, and the gel stands on its x = 40 face (see [What this branch changes](#what-this-branch-changes)). runSofa still draws the scene in its own frame, with the needle horizontal.
-- **Sideways stiffness.** In the two-layer gel, a 15 mm sideways move at full depth (5 cm into the gel) gives about 12 N along z and 17.7 N along y with the rigid needle (0.80 and 1.18 N/mm), with about 1.9 and 2.55 N·m at the base. Without the hard layer, on the same mesh, it gives about 1.35 N along z and 1.85 N along y (0.090 and 0.123 N/mm), with about 0.25 and 0.29 N·m. In the earlier uniform gel, on the coarse mesh, a 5 mm move gave about 0.66 N along z and 0.83 N along y with the rigid needle (0.13 and 0.17 N/mm), and about 0.25 and 0.35 N with the flexible needle. The moment at the base was then about 0.13 N·m with the rigid needle and 0.03–0.04 N·m with the flexible one.
+- **Sideways stiffness.** In the two-layer gel, a 15 mm sideways move at full depth (5 cm into the gel) gives about 12 N along z and 17.7 N along y with the rigid needle (0.80 and 1.18 N/mm), with about 1.9 and 2.55 N·m at the base. With the hard layer on top it gives about 1.6 N along z and 2.0 N along y (0.105 and 0.132 N/mm, 2026-11-18); see [Two layers](#two-layers). Without the hard layer, on the same mesh, it gives about 1.35 N along z and 1.85 N along y (0.090 and 0.123 N/mm), with about 0.25 and 0.29 N·m. In the earlier uniform gel, on the coarse mesh, a 5 mm move gave about 0.66 N along z and 0.83 N along y with the rigid needle (0.13 and 0.17 N/mm), and about 0.25 and 0.35 N with the flexible needle. The moment at the base was then about 0.13 N·m with the rigid needle and 0.03–0.04 N·m with the flexible one.
 - **Keep sideways moves small in the container gel.** Its mesh was coarse when it was tried (cells 4.8 × 3.2 × 2 cm along x, y, z) and nearly incompressible (Poisson ratio 0.48), and the container walls are 5 cm (z) and 8 cm (y) from the needle. Sideways moves of 3 and 5 mm work: 5 mm gives about 50 N along z and 25 N along y with the rigid needle, roughly 10 and 5 N/mm, and the coarse mesh couples the two (a move along z also pushes along y). 15 mm squashed the gel against the walls until the scene went unstable. A finer mesh around the needle would allow larger moves and reduce the coupling, at the cost of speed.
 
 ### Lockstep with Gazebo's clock

@@ -22,14 +22,17 @@ class PhysicsParams:
 
 @dataclass
 class FemParams:
-    # Two layers: a soft one on top (subcutaneous tissue) and a hard one from hardDepth below
-    # the top surface (x = minVol[0]) down to the bottom. Moduli in scene units, 100 Pa: 100 is
+    # Two layers, meeting hardDepth below the top surface (x = minVol[0]): a soft one on top
+    # (subcutaneous tissue) and a hard one down to the bottom, or the other way round with
+    # hardOnTop. NEEDLE_LAYERS=hard-on-top or soft-on-top in the environment sets hardOnTop
+    # without editing this (see NeedleInsertion.py). Moduli in scene units, 100 Pa: 100 is
     # 10 kPa. hardYoungModulus = youngModulus gives one uniform gel.
-    youngModulus: float = 100  # soft top layer
+    youngModulus: float = 100  # soft layer
     hardYoungModulus: float = 1000  # hard layer, 10 times stiffer
-    hardDepth: float = 2.4  # cm: halfway along the 5 cm insertion; must be on a node plane
-    softColor: string = "0.0 0.1 0.9 0.40"  # blue, see-through
-    hardColor: string = "0.85 0.25 0.2 0.55"  # red
+    hardDepth: float = 2.4  # cm deep, where the layers meet: on a node plane, mid-insertion
+    hardOnTop: bool = False  # True: the hard layer on top, the soft one below
+    softColor: string = "0.0 0.1 0.9 0.40"  # blue, see-through: the soft layer, wherever it is
+    hardColor: string = "0.85 0.25 0.2 0.55"  # red: the hard layer
     poissonRatio: float = 0.48
     mass: float = 0.3
     rayleigh: float = 0.1
@@ -74,11 +77,12 @@ class ConstraintsParams:
     constraintDistance: float = 1.3  # distance between two constraint points
     entryForce: float = 0.3  # The required force to penetrate the volume
     # Friction along the shaft (see examples/needle/shaftFriction.py), in scene units, 0.01 N
-    # per cm of shaft in the gel: frictionPerLength in the soft top layer (20 is 0.2 N/cm),
-    # hardFrictionPerLength in the hard layer (60 is 0.6 N/cm). At the 5 cm insertion, 2.4 cm
-    # soft and 2.6 cm hard, that is about 2 N. Placeholders, chosen to show the layer
-    # boundary; calibrate before quoting. A uniform gel (FemParams.hardYoungModulus =
-    # youngModulus) has no hard layer, so frictionPerLength throughout.
+    # per cm of shaft in the gel: frictionPerLength in the soft layer (20 is 0.2 N/cm),
+    # hardFrictionPerLength in the hard layer (60 is 0.6 N/cm), wherever each layer is. At the
+    # 5 cm insertion with the soft layer on top, 2.4 cm soft and 2.6 cm hard, that is about
+    # 2 N. Placeholders, chosen to show the layer boundary; calibrate before quoting. A uniform
+    # gel (FemParams.hardYoungModulus = youngModulus) has no hard layer, so frictionPerLength
+    # throughout.
     # frictionCoefficient adds mu * |sideways force| at each gel point. All 0: no friction.
     frictionPerLength: float = 20.0
     hardFrictionPerLength: float = 60.0
